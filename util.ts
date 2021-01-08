@@ -115,6 +115,27 @@ export function identifierValidating(name:string):string
     return name;
 }
 
+export function instanceProxy(instance:any):void
+{
+
+    for (const name in instance)
+    {
+        const fn = instance[name];
+        if (fn instanceof Function)
+        {
+            instance[name] = function(...args:any[]):any
+            {
+                console.log(name, '(', args.join(', '), ')');
+                return fn.apply(this, args);
+            };
+        }
+        else
+        {
+            instance[name] = fn;
+        }
+    }
+}
+
 
 const EMPTY = {};
 

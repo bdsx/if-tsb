@@ -13,7 +13,7 @@ const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 
 const builtin = new Set<string>(require('module').builtinModules);
 
-const CACHE_SIGNATURE = 'tsb-kr-cache-0.4';
+const CACHE_SIGNATURE = '\ntsb-kr-cache-0.4';
 
 function getCacheFilePath(id:TsBundlerModuleId):string
 {
@@ -24,6 +24,7 @@ export interface TsBundlerOptions
 {
     clearConsole?:boolean;
     verbose?:boolean;
+    checkCircularDependency?:boolean;
     entry:string[]|Record<string, string>|string;
     globalModuleVarName?:string;
     output?:string;
@@ -58,13 +59,13 @@ export class TsBundlerRefined
             writer.on('error', err=>{
                 bundler.taskQueue.error(err);
             });
-            await write(writer, CACHE_SIGNATURE+'\n');
             await write(writer, this.dependency.join(path.delimiter)+'\n');
             await write(writer, this.firstLineComment ? this.firstLineComment+'\n' : '\n');
             await write(writer, this.sourceMapOutputLineOffset+'\n');
             await write(writer, this.outputLineCount+'\n');
             await write(writer, this.sourceMapText ? this.sourceMapText.replace(/[\r\n]/g, '')+'\n' : '\n');
             await write(writer, this.content);
+            await write(writer, CACHE_SIGNATURE);
             await writerEnd(writer);
             bundler.taskQueue.unref();
         });
@@ -74,16 +75,17 @@ export class TsBundlerRefined
     {
         const cachepath = getCacheFilePath(this.id);
         const content = await fs.promises.readFile(cachepath, 'utf-8');
-        const splited = splitContent(content, 7, '\n');
-        const version = splited[0];
-        if (CACHE_SIGNATURE !== version) throw Error('Outdated cache');
-        const deps = splited[1];
+        if (!content.endsWith(CACHE_SIGNATURE)) throw Error('Outdated cache or failed data');
+        const splited = splitContent(content, 6, '\n');
+        content.endsWith('')
+        const deps = splited[0];
         this.dependency = deps === '' ? [] : deps.split(path.delimiter);
-        this.firstLineComment = splited[2] || null;
-        this.sourceMapOutputLineOffset = +splited[3];
-        this.outputLineCount = +splited[4];
-        this.sourceMapText = splited[5] || null;
-        this.content = splited[6];
+        this.firstLineComment = splited[1] || null;
+        this.sourceMapOutputLineOffset = +splited[2];
+        this.outputLineCount = +splited[3];
+        this.sourceMapText = splited[4] || null;
+        const source = splited[5];
+        this.content = source.substr(0, source.length - CACHE_SIGNATURE.length);
     }
     
     static async loadCacheIfNotModified(id:TsBundlerModuleId):Promise<TsBundlerRefined|null>
@@ -131,12 +133,14 @@ export class TsBundler
     public readonly globalVarName:string;
     public readonly clearConsole:boolean;
     public readonly verbose:boolean;
+    public readonly checkCircularDependency:boolean;
 
     public readonly modules = new Map<string, TsBundlerModule>();
     public readonly taskQueue = new ConcurrencyQueue;
 
     constructor(
         public readonly main:TsBundlerMainContext,
+        public readonly basedir:string, 
         public readonly entry:string, 
         resolvedOutput:string,
         options:TsBundlerOptions, 
@@ -152,6 +156,7 @@ export class TsBundler
         this.globalVarName = options.globalModuleVarName || '__tsb';
         this.clearConsole = options.clearConsole || false;
         this.verbose = options.verbose || false;
+        this.checkCircularDependency = options.checkCircularDependency || false;
     }
 
     isEntryModule(module:TsBundlerModule):boolean
@@ -234,7 +239,7 @@ export class TsBundler
         this.lineOffset += refined.outputLineCount;
     }
 
-    refine(module:TsBundlerModule, dependency:string[], content:string, selfExports:boolean, sourceMapText:string|null):TsBundlerRefined
+    refine(module:TsBundlerModule, dependency:string[], content:string, selfExports:boolean, sourceMapText:string|null, doNotSave:boolean):TsBundlerRefined
     {
         let contentBegin = 0;
         let contentEnd = content.length;
@@ -293,18 +298,20 @@ if (module.exports) return module.exports;\n`;
         refined.content += content.substring(contentBegin, contentEnd);
         refined.content += '\nreturn module.exports;\n},\n';
         refined.sourceMapText = sourceMapText;
-        refined.save(this);
+        if (!doNotSave) refined.save(this);
         return refined;
     }
         
     async bundle():Promise<boolean>
     {
         if (this.writer !== null) throw Error('bundler is busy');
+        if (this.verbose) console.log(this.entry+': starting');
         this.mapgen = new sourceMap.SourceMapGenerator({
             file:'./'+path.basename(this.output)
         });
         this.modules.clear();
-        this.entryModule = this.add(this.entry);
+        this.entryModule = this.add(null, this.entry).module;
+
         await this.taskQueue.onceEnd();
         if (this.writer === null)
         {
@@ -334,15 +341,29 @@ if (module.exports) return module.exports;\n`;
         return true;
     }
 
-    add(filepath:string):TsBundlerModule
+    add(parent:TsBundlerModule|null, filepath:string):{module:TsBundlerModule, circularDependency: boolean}
     {
-        const apath = path.resolve(filepath);
-        let file = this.modules.get(apath);
-        if (file) return file;
-        file = new TsBundlerModule(this, apath);
-        this.modules.set(apath, file);
-        this.taskQueue.run(()=>file!.load());
-        return file;
+        const apath = path.resolve(this.basedir, filepath);
+        let module = this.modules.get(apath);
+        if (module)
+        {
+            if (this.checkCircularDependency)
+            {
+                while (parent !== null)
+                {
+                    if (parent === module)
+                    {
+                        return {module, circularDependency: true};
+                    }
+                    parent = parent.parent;
+                }
+            }
+            return {module, circularDependency: false,};
+        }
+        module = new TsBundlerModule(this, parent, apath);
+        this.modules.set(apath, module);
+        this.taskQueue.run(()=>module!.load());
+        return {module, circularDependency: false};
     }
 }
 
@@ -351,16 +372,19 @@ export class TsBundlerModule
     public readonly id:TsBundlerModuleId;
     public readonly rpath:string;
 
-    constructor(public readonly bundler:TsBundler, apath:string)
+    constructor(
+        public readonly bundler:TsBundler, 
+        public readonly parent:TsBundlerModule|null, 
+        apath:string)
     {
         this.id = bundler.main.getModuleId(bundler, apath);
-        this.rpath = path.relative(bundler.main.cwd, apath);
+        this.rpath = path.relative(bundler.basedir, apath);
     }
 
     error(node:ts.Node, code:number, message:string):void
     {
         const source = node.getSourceFile();
-        const pos = source.getLineAndCharacterOfPosition(node.pos);
+        const pos = source.getLineAndCharacterOfPosition(node.getStart());
         const width = node.getWidth();
 
         const sourceText = source.getFullText();
@@ -371,54 +395,123 @@ export class TsBundlerModule
         const end = linenum < lines.length ? lines[linenum]-1 : sourceText.length;
 
         const lineText = sourceText.substring(start, end);
-        this.bundler.main.report(this.rpath, linenum, pos.character+1, code, message, lineText, width);
+        this.bundler.main.report(this.rpath, linenum, pos.character, code, message, lineText, width);
+    }
+
+    getParents():TsBundlerModule[]
+    {
+        const out:TsBundlerModule[] = [this];
+
+        let node = this.parent;
+        while (node !== null)
+        {
+            out.push(node);
+            node = node.parent;
+        }
+        return out;
     }
 
     private async _refine():Promise<TsBundlerRefined|null>
     {
-        const dependency:string[] = [];
-        const importFromStringLiteral = (_node:ts.Node, base:ts.Node, ctx:ts.TransformationContext):ts.Node=>{
-            if (_node.kind !== ts.SyntaxKind.StringLiteral)
+        let doNotSave = false;
+        const basedir = this.bundler.basedir;
+        const sys:ts.System = {
+            getCurrentDirectory():string
             {
-                this.error(_node, 1005, `Does not support dynamic import, (${ts.SyntaxKind[_node.kind]} is not string literal)`);
-                return base;
-            }
-            const node = _node as ts.StringLiteral;
-            let module = 
-                ts.nodeModuleNameResolver(node.text, this.id.apath, this.bundler.tsoptions, ts.sys);
-            if (!module.resolvedModule && node.text === '.') 
-                module = ts.nodeModuleNameResolver('./index', this.id.apath, this.bundler.tsoptions, ts.sys) ;
-            const info = module.resolvedModule;
-            if (!info)
+                return basedir;
+            },
+            directoryExists(filepath:string):boolean
             {
-                if (builtin.has(node.text)) return base;
-                this.error(_node, 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
-                return base;
-            }    
-            if (info.isExternalLibraryImport) return base;
-
-            let filepath = info.resolvedFileName;
-            const kind = getScriptKind(filepath);
-            if (kind.kind === ts.ScriptKind.External)
-            {
-                filepath = filepath.substr(0, filepath.length-kind.ext.length+1)+'js';
-                if (!fs.existsSync(filepath))
+                try
                 {
-                    this.error(_node, 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
+                    const joined = path.isAbsolute(filepath) ? filepath : path.join(basedir, filepath);
+                    const stat = fs.statSync(joined);
+                    return stat.isDirectory();
+                }
+                catch (err)
+                {
+                    return false;
+                }
+            },
+            fileExists(filepath:string):boolean
+            {
+                const joined = path.isAbsolute(filepath) ? filepath : path.join(basedir, filepath);
+                return fs.existsSync(joined);
+            },
+        } as any;
+        Object.setPrototypeOf(sys, ts.sys);
+
+        const dependency:string[] = [];
+
+        const factory = (ctx:ts.TransformationContext)=>{
+            const stacks:ts.Node[] = [];
+
+            const findPositionedNode = ():ts.Node=>{
+                for (let i = stacks.length-1; i >= 0; i--)
+                {
+                    let node = stacks[i];
+                    const ori  =(node as any).original;
+                    if (ori) node = ori;
+                    if (node.pos === -1) continue;
+                    return node;
+                }
+                return sourceFile;
+            };
+
+            const importFromStringLiteral = (_node:ts.Node, base:ts.Node):ts.Node=>{
+                if (_node.kind !== ts.SyntaxKind.StringLiteral)
+                {
+                    doNotSave = true;
+                    this.error(findPositionedNode(), 1005, `Does not support dynamic import, (${ts.SyntaxKind[_node.kind]} is not string literal)`);
                     return base;
                 }
-            }
-
-            const source = this.bundler.add(filepath);
-            dependency.push(source.id.apath);
+                const node = _node as ts.StringLiteral;
+                let module = ts.nodeModuleNameResolver(node.text, this.id.apath, this.bundler.tsoptions, sys);
+                if (!module.resolvedModule && node.text === '.') 
+                    module = ts.nodeModuleNameResolver(path.join(basedir, 'index'), this.id.apath, this.bundler.tsoptions, sys);
+                const info = module.resolvedModule;
+                if (!info)
+                {
+                    if (builtin.has(node.text)) return base;
+                    doNotSave = true;
+                    this.error(findPositionedNode(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
+                    return base;
+                }    
+                if (info.isExternalLibraryImport) return base;
     
-            return ctx.factory.createCallExpression(
-                ctx.factory.createPropertyAccessExpression(ctx.factory.createIdentifier(this.bundler.globalVarName), ctx.factory.createIdentifier(source.id.varName)), 
-                [], []);;
-        };
-
-        const factory:ts.TransformerFactory<ts.SourceFile> = (ctx:ts.TransformationContext)=>{
+                let filepath = info.resolvedFileName;
+                const kind = getScriptKind(filepath);
+                if (kind.kind === ts.ScriptKind.External)
+                {
+                    filepath = filepath.substr(0, filepath.length-kind.ext.length+1)+'js';
+                    if (!fs.existsSync(filepath))
+                    {
+                        doNotSave = true;
+                        this.error(findPositionedNode(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
+                        return base;
+                    }
+                }
+    
+                const {module: source, circularDependency} = this.bundler.add(this, filepath);
+                if (circularDependency)
+                {
+                    let parents = this.getParents();
+                    parents.reverse();
+                    parents.push(source);
+                    doNotSave = true;
+                    this.error(findPositionedNode(), 1005, 'Circular dependency '+parents.map(m=>colors.yellow(m.rpath)).join(' → '));
+                }
+    
+                dependency.push(source.id.apath);
+        
+                return ctx.factory.createCallExpression(
+                    ctx.factory.createPropertyAccessExpression(ctx.factory.createIdentifier(this.bundler.globalVarName), ctx.factory.createIdentifier(source.id.varName)), 
+                    [], []);;
+            };
+    
             const visit = (_node:ts.Node):ts.Node=>{
+                stacks.push(_node);
+
                 switch (_node.kind)
                 {
                 case ts.SyntaxKind.ImportEqualsDeclaration: {
@@ -427,7 +520,7 @@ export class TsBundlerModule
                     const ref = node.moduleReference as ts.ExternalModuleReference;
                     if (ref.kind === ts.SyntaxKind.ExternalModuleReference)
                     {
-                    const nnode = importFromStringLiteral(ref.expression, _node, ctx);
+                    const nnode = importFromStringLiteral(ref.expression, _node);
                     if (nnode === _node) return _node;
                     return ctx.factory.createVariableDeclaration(node.name, undefined, undefined, nnode as ts.Expression);
                     }
@@ -435,7 +528,7 @@ export class TsBundlerModule
                 }
                 case ts.SyntaxKind.ImportDeclaration: {
                     const node = _node as ts.ImportDeclaration;
-                    return importFromStringLiteral(node.moduleSpecifier, node, ctx);
+                    return importFromStringLiteral(node.moduleSpecifier, _node);
                 }
                 case ts.SyntaxKind.CallExpression:
                     const node = _node as ts.CallExpression;
@@ -444,16 +537,17 @@ export class TsBundlerModule
                     case ts.SyntaxKind.ImportKeyword: {
                     if (node.arguments.length !== 1)
                     {
-                        this.error(_node, 1005, `Cannot call import with multiple parameters`);
+                        doNotSave = true;
+                        this.error(findPositionedNode(), 1005, `Cannot call import with multiple parameters`);
                         return _node;
                     }
-                    return importFromStringLiteral(node.arguments[0], _node, ctx);
+                    return importFromStringLiteral(node.arguments[0], _node);
                     }
                     case ts.SyntaxKind.Identifier: {
                     const identifier = node.expression as ts.Identifier;
                     if (identifier.escapedText === 'require')
                     {
-                        return importFromStringLiteral(node.arguments[0], _node, ctx);
+                        return importFromStringLiteral(node.arguments[0], _node);
                     }
                     break;
                     }
@@ -461,9 +555,11 @@ export class TsBundlerModule
                     }
                     break;
                 }
-                return ts.visitEachChild(_node, visit, ctx);
+                const ret = ts.visitEachChild(_node, visit, ctx);
+                stacks.pop();
+                return ret;
             };
-            return sourceFile=>ts.visitNode(sourceFile, visit);
+            return (sourceFile:ts.SourceFile)=>ts.visitNode(sourceFile, visit);
         };
 
         let filepath = this.id.apath;
@@ -476,7 +572,7 @@ export class TsBundlerModule
         }
         catch (err)
         {
-            this.bundler.main.reportMessage(err.message);
+            this.bundler.main.reportMessage(err.message+' '+filepath);
             return null;
         }
 
@@ -487,18 +583,19 @@ export class TsBundlerModule
         switch (info.kind)
         {
         case ts.ScriptKind.JSON:
-            return this.bundler.refine(this, dependency, 'module.exports = '+source+';', true, null);
+            return this.bundler.refine(this, dependency, 'module.exports = '+source+';', true, null, doNotSave);
         case ts.ScriptKind.JS:
             const result = ts.transform(sourceFile, [factory], this.bundler.tsoptions);
             if (result.diagnostics && result.diagnostics.length !== 0)
             { 
+                doNotSave = true;
                 this.bundler.main.reportFromDiagnostics(result.diagnostics);
             }
             const printer = ts.createPrinter({
                 removeComments: false
             });
             const content = printer.printFile(result.transformed[0]);
-            return this.bundler.refine(this, dependency, content, false, null);
+            return this.bundler.refine(this, dependency, content, false, null, doNotSave);
         }
 
         const bundler = this.bundler;
@@ -544,10 +641,13 @@ export class TsBundlerModule
             /*writeFile*/ undefined, 
             /*cancellationToken*/ undefined, 
             /*emitOnlyDtsFiles*/ undefined, 
-            { after: [factory] });
+            { 
+                after: [factory] 
+            });
         
         if (diagnostics.length !== 0)
         {
+            doNotSave = true;
             this.bundler.main.reportFromDiagnostics(diagnostics);
         }
         if (!outputText)
@@ -555,7 +655,7 @@ export class TsBundlerModule
             this.bundler.main.reportMessage(`Failed to parse ${filepath}`);
             return null;
         }
-        return this.bundler.refine(this, dependency, outputText, false, sourceMapText);
+        return this.bundler.refine(this, dependency, outputText, false, sourceMapText, doNotSave);
     }
 
     async refine():Promise<TsBundlerRefined|null>
@@ -565,7 +665,7 @@ export class TsBundlerModule
         {
             for (const dep of refined.dependency)
             {
-                this.bundler.add(dep);
+                this.bundler.add(this, dep);
             }
         }
         else
@@ -593,7 +693,6 @@ export interface TsBundlerModuleId
 export class TsBundlerMainContext
 {
     public errorCount = 0;
-    public readonly cwd = process.cwd();
     private readonly cache:Record<string, Record<string,TsBundlerModuleId>>;
     private readonly cacheUnusingId:number[] = [];
     private cahceIdCounter = -1;
@@ -689,6 +788,7 @@ export class TsBundlerMainContext
      */
     reportMessage(message:string):void
     {
+        this.errorCount++;
         console.log(`${colors.red('error')} ${colors.gray('TS6053:')} ${message}`);
     }
 
@@ -748,7 +848,7 @@ export class TsBundlerMainContext
         return id;
     }
 
-    private _makeBundlers(options:TsBundlerOptions, tsconfig:string|null, compilerOptions:ts.CompilerOptions):TsBundler[]
+    private _makeBundlers(options:TsBundlerOptions, basedir:string, tsconfig:string|null, compilerOptions:ts.CompilerOptions):TsBundler[]
     {
         const varmap = new Map<string, string>();
 
@@ -759,6 +859,7 @@ export class TsBundlerMainContext
                 const filename = path.basename(name);
                 const ext = path.extname(filename);
                 varmap.set('name', filename.substr(0, filename.length - ext.length));
+                varmap.set('dirname', path.dirname(name));
 
                 const regex = /\[.+\]/g;
                 return options.output.replace(regex, matched=>{
@@ -772,7 +873,12 @@ export class TsBundlerMainContext
             }
         }
         let entry = options.entry;
-        if (typeof entry === 'string')
+        if (entry === undefined)
+        {
+            const name = './index.ts';
+            entry = {[name]: getOutFileName(name)};
+        }
+        else if (typeof entry === 'string')
         {
             entry = {[entry]: getOutFileName(entry)};
         }
@@ -789,7 +895,7 @@ export class TsBundlerMainContext
         for (const entryfile in entry)
         {
             const output = entry[entryfile];
-            const resolvedOutput = path.resolve(output);
+            const resolvedOutput = path.resolve(basedir, output);
             if (this.outputs.has(resolvedOutput))
             {
                 this.reportMessage(`outputs are dupplicated. ${output}`);
@@ -797,7 +903,7 @@ export class TsBundlerMainContext
             }
             try
             {
-                const bundler = new TsBundler(this, entryfile, resolvedOutput, options, tsconfig, compilerOptions);
+                const bundler = new TsBundler(this, basedir, entryfile, resolvedOutput, options, tsconfig, compilerOptions);
                 bundlers.push(bundler);
             }
             catch (err)
@@ -811,17 +917,28 @@ export class TsBundlerMainContext
     makeBundlersWithPath(configPath:string, output?:string):TsBundler[]
     {
         configPath = path.resolve(configPath);
+        let basedir:string;
         try
         {
             const stat = fs.statSync(configPath);
             if (stat.isDirectory())
             {
+                basedir = configPath;
                 const npath = path.join(configPath, 'tsconfig.json');
-                if (!fs.existsSync(npath))
+                if (fs.existsSync(npath))
                 {
                     configPath = npath;
                 }
+                else
+                {
+                    configPath = path.join(configPath, 'index.ts');
+                }
             }
+            else
+            {
+                basedir = path.dirname(configPath);
+            }
+
             if (configPath.endsWith('.json'))
             {
                 const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
@@ -835,6 +952,7 @@ export class TsBundlerMainContext
                 if (output) options.output = output;
                 return this._makeBundlers(
                     options, 
+                    basedir,
                     configPath,
                     tsoptions);
             }
@@ -842,6 +960,7 @@ export class TsBundlerMainContext
             {
                 return this._makeBundlers(
                     { entry: configPath, output }, 
+                    basedir,
                     null,
                     ts.getDefaultCompilerOptions());
             }
@@ -857,6 +976,7 @@ export class TsBundlerMainContext
     {
         let tsoptions:ts.CompilerOptions;
         let tsconfig:string|null = null;
+        const basedir = process.cwd();
         
         try
         {
@@ -877,7 +997,7 @@ export class TsBundlerMainContext
             return [];
         }
 
-        return this._makeBundlers(options, tsconfig, tsoptions);
+        return this._makeBundlers(options, basedir, tsconfig, tsoptions);
     }
 }
 
@@ -925,13 +1045,13 @@ export function bundleWatch(entries:string[], output?:string):void
         
         async function bundle(bundlers:TsBundler[]):Promise<void>
         {
+            watcher.pause();
             if (bundlers.length === 0)
             {
                 console.log('no changes');
             }
             else
             {
-                watcher.pause();
                 for (const bundler of bundlers)
                 {
                     try
@@ -946,12 +1066,12 @@ export function bundleWatch(entries:string[], output?:string):void
                     if (bundler.tsconfig !== null) files.push(bundler.tsconfig);
                     watcher.watch(bundler, files);
                 }
-                watcher.resume();
             }
 
             console.log(`[${time()}] ${ctx.getErrorCountString()}. Watching for file changes.`);
             ctx.errorCount = 0;
             ctx.saveCacheJson();
+            watcher.resume();
         }
 
         const clearConsole = bundlers.some(bundler=>bundler.clearConsole);

@@ -54,6 +54,20 @@ tsb -w # build with watch
     }
 }
 ```
+* default all options
+```js
+{
+    "entry": "./index.ts",
+    "output": "[dirname]/[name].bundled.js",
+    "globalModuleVarName": "__tsb",
+    "checkCircularDependency": false, 
+    "cleanConsole": false,
+    "verbose": false,
+    "compilerOptions": {
+        /* ... */
+    }
+}
+```
 
 ### Build with API
 ```ts
