@@ -15,9 +15,6 @@ const builtin = new Set<string>(require('module').builtinModules);
 
 const CACHE_SIGNATURE = 'tsb-kr-cache-0.4';
 
-import './test';
-import { timeStamp } from 'console';
-
 function getCacheFilePath(id:TsBundlerModuleId):string
 {
     return path.join(cacheDir, id.number+'');
