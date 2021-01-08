@@ -1,11 +1,14 @@
 ## if-tsb: Insanely Fast TypeScript Bundler
-if-tsb is Bundler for TypeScript
+if-tsb is Bundler for TypeScript.
 
 ```sh
 npm i -g if-tsb # install
 tsb # build
+tsb . # build with specific path
 tsb ./index.ts # build with specific entry
-tsb -w # watch
+tsb ./tsconfig.json # build with specific tsconfig.json
+tsb -o ./output.js # build with specific output
+tsb -w # build with watch
 ```
 
 
@@ -50,4 +53,14 @@ tsb -w # watch
         /* ... */
     }
 }
+```
+
+### Build with API
+```ts
+import { bundle, bundleWatch } = require('if-tsb');
+
+bundle(['./entry.ts'] /*, './output.js' */); // build
+
+// bundleWatch(['./entry.ts']); // watch
+
 ```

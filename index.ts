@@ -816,7 +816,11 @@ export class TsBundlerMainContext
             const stat = fs.statSync(configPath);
             if (stat.isDirectory())
             {
-                configPath = path.join(configPath, 'tsconfig.json');
+                const npath = path.join(configPath, 'tsconfig.json');
+                if (!fs.existsSync(npath))
+                {
+                    configPath = npath;
+                }
             }
             if (configPath.endsWith('.json'))
             {
