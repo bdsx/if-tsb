@@ -6,7 +6,6 @@ import sourceMap = require('source-map');
 import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind } from './util';
 import findCacheDir = require('find-cache-dir');
 import colors = require('colors');
-import { writer } from 'repl';
 
 const cacheDir = findCacheDir({name: 'tsb-kr'}) || './.tsb-kr.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
@@ -109,6 +108,7 @@ export class TsBundlerRefined
 }
 
 const resolved = Promise.resolve();
+
 function write(writer:fs.WriteStream, data:string):Promise<void>
 {
     if (writer.write(data)) return resolved;
@@ -137,6 +137,10 @@ export class TsBundler
 
     public readonly modules = new Map<string, TsBundlerModule>();
     public readonly taskQueue = new ConcurrencyQueue;
+    private readonly sourceFileCache = new Map<string, ts.SourceFile>();
+
+    private csResolve:(()=>void)[] = [];
+    private csEntered = false;
 
     constructor(
         public readonly main:TsBundlerMainContext,
@@ -159,9 +163,66 @@ export class TsBundler
         this.checkCircularDependency = options.checkCircularDependency || false;
     }
 
+    private _lock():Promise<void>
+    {
+        if (!this.csEntered)
+        {
+            this.csEntered = true;
+            return resolved;
+        }
+
+        return new Promise<void>(resolve=>{
+            this.csResolve.push(resolve);
+        });
+    }
+
+    private _unlock():void
+    {
+        if (this.csResolve.length === 0)
+        {
+            if (this.csEntered)
+            {
+                this.csEntered = false;
+                return;
+            }
+            this.main.reportMessage(20000, 'Internal implementation problem');
+            return;
+        }
+        const resolve = this.csResolve.pop()!;
+        resolve();
+    }
+
+    resolvePath(filepath:string):string
+    {
+        return path.isAbsolute(filepath) ? path.join(filepath) : path.join(this.basedir, filepath);
+    }
+
     isEntryModule(module:TsBundlerModule):boolean
     {
         return this.entryModule === module;
+    }
+
+    async getSourceFile(filepath:string):Promise<ts.SourceFile>
+    {
+        let sourceFile = this.sourceFileCache.get(filepath);
+        if (sourceFile) return sourceFile;
+        
+        const source = await fs.promises.readFile(filepath, 'utf-8');
+        sourceFile = ts.createSourceFile(filepath, source, this.tsoptions.target!);
+        this.sourceFileCache.set(filepath, sourceFile);
+        
+        return sourceFile;
+    }
+
+    getSourceFileSync(filepath:string, languageVersion?: ts.ScriptTarget):ts.SourceFile|undefined
+    {
+        let sourceFile = this.sourceFileCache.get(filepath);
+        if (sourceFile) return sourceFile;
+        const source = fs.readFileSync(filepath, 'utf-8');
+        sourceFile = ts.createSourceFile(filepath, source, languageVersion || this.tsoptions.target!);
+        this.sourceFileCache.set(filepath, sourceFile);
+
+        return sourceFile;
     }
 
     private async _startWriting(firstLineComment:string|null):Promise<void>
@@ -204,10 +265,14 @@ export class TsBundler
     {
         if (this.writer === null)
         {
+            await this._lock();
             await this._startWriting(refined.firstLineComment);
+            this._unlock();
         }
         if (this.verbose) console.log(refined.id.apath+': writing');
+        await this._lock();
         await write(this.writer!, refined.content);
+        this._unlock();
 
         if (refined.sourceMapText)
         {
@@ -384,6 +449,11 @@ export class TsBundlerModule
     error(node:ts.Node, code:number, message:string):void
     {
         const source = node.getSourceFile();
+        if (source === undefined)
+        {
+            this.bundler.main.reportMessage(code, message);
+            return;
+        }
         const pos = source.getLineAndCharacterOfPosition(node.getStart());
         const width = node.getWidth();
 
@@ -414,7 +484,8 @@ export class TsBundlerModule
     private async _refine():Promise<TsBundlerRefined|null>
     {
         let doNotSave = false;
-        const basedir = this.bundler.basedir;
+        const bundler = this.bundler;
+        const basedir = bundler.basedir;
         const sys:ts.System = {
             getCurrentDirectory():string
             {
@@ -424,8 +495,7 @@ export class TsBundlerModule
             {
                 try
                 {
-                    const joined = path.isAbsolute(filepath) ? filepath : path.join(basedir, filepath);
-                    const stat = fs.statSync(joined);
+                    const stat = fs.statSync(bundler.resolvePath(filepath));
                     return stat.isDirectory();
                 }
                 catch (err)
@@ -435,8 +505,7 @@ export class TsBundlerModule
             },
             fileExists(filepath:string):boolean
             {
-                const joined = path.isAbsolute(filepath) ? filepath : path.join(basedir, filepath);
-                return fs.existsSync(joined);
+                return fs.existsSync(bundler.resolvePath(filepath));
             },
         } as any;
         Object.setPrototypeOf(sys, ts.sys);
@@ -565,25 +634,24 @@ export class TsBundlerModule
         let filepath = this.id.apath;
         const info = getScriptKind(filepath);
         
-        let source:string;
+        let sourceFile:ts.SourceFile;
         try
         {
-            source = await fs.promises.readFile(filepath, 'utf-8');
+            sourceFile = await bundler.getSourceFile(filepath);
         }
         catch (err)
         {
-            this.bundler.main.reportMessage(err.message+' '+filepath);
+            this.bundler.main.reportMessage(6053, err.message+' '+filepath);
             return null;
         }
-
-        const sourceFile = ts.createSourceFile(filepath, source, this.bundler.tsoptions.target!, undefined, info.kind);
+        
         let sourceMapText:string|null = null;
         let outputText = '';
 
         switch (info.kind)
         {
         case ts.ScriptKind.JSON:
-            return this.bundler.refine(this, dependency, 'module.exports = '+source+';', true, null, doNotSave);
+            return this.bundler.refine(this, dependency, 'module.exports = '+sourceFile.text+';', true, null, doNotSave);
         case ts.ScriptKind.JS:
             const result = ts.transform(sourceFile, [factory], this.bundler.tsoptions);
             if (result.diagnostics && result.diagnostics.length !== 0)
@@ -598,13 +666,14 @@ export class TsBundlerModule
             return this.bundler.refine(this, dependency, content, false, null, doNotSave);
         }
 
-        const bundler = this.bundler;
         const isEntry = bundler.isEntryModule(this);
+        const compilerHostBase = ts.createCompilerHost(bundler.tsoptions);
         const compilerHost:ts.CompilerHost = {
-            getSourceFile(fileName) { 
-                return path.normalize(fileName) === filepath ? sourceFile : undefined;
+            getSourceFile(fileName:string, languageVersion: ts.ScriptTarget, onError?: (message: string) => void, shouldCreateNewSourceFile?: boolean) {
+                if (bundler.resolvePath(fileName) === filepath) return sourceFile;
+                return undefined;
             },
-            writeFile(name, text) {
+            writeFile(name:string, text:string) {
                 const info = getScriptKind(name);
                 if (info.kind === ts.ScriptKind.JS) {
                     outputText = text;
@@ -623,18 +692,18 @@ export class TsBundlerModule
                     sourceMapText = text;
                 }
             },
-            getDefaultLibFileName() { return 'lib.d.ts'; },
-            useCaseSensitiveFileNames() { return false; },
-            getCanonicalFileName(fileName) { return fileName; },
-            getCurrentDirectory() { return ""; },
-            getNewLine() { return ts.sys.newLine; },
-            fileExists(fileName) { return path.normalize(fileName) === filepath; },
-            readFile() { return ""; },
-            directoryExists() { return true; },
-            getDirectories() { return []; }
-        };
+            getCurrentDirectory() { return sys.getCurrentDirectory(); },
+            fileExists(fileName:string) { return bundler.resolvePath(fileName) === filepath; },
+            readFile(fileName:string) { return sys.readFile(fileName); },
+            directoryExists(dirName:string) { return sys.directoryExists(dirName); },
+            getDirectories(dirName:string) { return sys.getDirectories(dirName); }
+        } as any;
+        Object.setPrototypeOf(compilerHost, compilerHostBase);
         const diagnostics:ts.Diagnostic[] = [];
         const program = ts.createProgram([filepath], this.bundler.tsoptions, compilerHost, undefined, diagnostics);
+        
+        diagnostics.push(...program.getSyntacticDiagnostics(sourceFile));
+        // diagnostics.push(...program.getOptionsDiagnostics());
         
         program.emit(
             /*targetSourceFile*/ undefined, 
@@ -652,7 +721,7 @@ export class TsBundlerModule
         }
         if (!outputText)
         {
-            this.bundler.main.reportMessage(`Failed to parse ${filepath}`);
+            this.bundler.main.reportMessage(6053, `Failed to parse ${filepath}`);
             return null;
         }
         return this.bundler.refine(this, dependency, outputText, false, sourceMapText, doNotSave);
@@ -786,10 +855,10 @@ export class TsBundlerMainContext
     /**
      * mimic TS errors
      */
-    reportMessage(message:string):void
+    reportMessage(code:number, message:string):void
     {
         this.errorCount++;
-        console.log(`${colors.red('error')} ${colors.gray('TS6053:')} ${message}`);
+        console.log(`${colors.red('error')} ${colors.gray(`TS${code}:`)} ${message}`);
     }
 
     /**
@@ -797,12 +866,12 @@ export class TsBundlerMainContext
      */
     reportFromCatch(err:any):boolean
     {
-        this.errorCount++;
         if (err.code === 'ENOENT')
         {
-            this.reportMessage(err.message);
+            this.reportMessage(6053, err.message);
             return true;
         }
+        this.errorCount++;
         console.error(err);
         return false;
     }
@@ -898,7 +967,7 @@ export class TsBundlerMainContext
             const resolvedOutput = path.resolve(basedir, output);
             if (this.outputs.has(resolvedOutput))
             {
-                this.reportMessage(`outputs are dupplicated. ${output}`);
+                this.reportMessage(6053, `outputs are dupplicated. ${output}`);
                 continue;
             }
             try
