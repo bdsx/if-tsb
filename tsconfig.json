@@ -1,0 +1,23 @@
+{
+    "entry": {
+        "./cli.ts": "./cli.bundle.js",
+        "./index.ts": "./index.bundle.js"
+    },
+    "verbose": true,
+    "compilerOptions": {
+        "target": "es2017",
+        "lib": [ "es2017" ],
+        "module": "CommonJS",
+        "moduleResolution": "Node",
+        "alwaysStrict": true,
+        "noImplicitAny": true,
+        "strictNullChecks": true,
+        "noImplicitThis": true,
+        "resolveJsonModule": true,
+        "declaration": true,
+        "sourceMap": true,
+        "paths": {
+          "bdsx/*": ["./bdsx/*"]
+       }
+    }
+}
