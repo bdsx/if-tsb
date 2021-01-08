@@ -2,7 +2,7 @@
 if-tsb is Bundler for TypeScript
 
 ```sh
-npm i if-tsb # install
+npm i -g if-tsb # install
 tsb # build
 tsb ./index.ts # build with specific entry
 tsb -w # watch
