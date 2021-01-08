@@ -12,7 +12,7 @@ tsb -w # watch
 ### tsconfig.json
 
 * define entry  
-```json
+```js
 {
     "entry": "./entry.ts", // output: "./entry.bundle.js"
     "compilerOptions": {
@@ -21,7 +21,7 @@ tsb -w # watch
 }
 ```
 * define multiple entry  
-```json
+```js
 {
     "entry": ["./entry.ts", "./entry2.ts"], // output: "./entry.bundle.js", "./entry2.bundle.js"
     "compilerOptions": {
@@ -30,7 +30,7 @@ tsb -w # watch
 }
 ```
 * define entry with specific output  
-```json
+```js
 {
     "entry": {
         "./entry.ts": "./bundled.output.js",
@@ -42,7 +42,7 @@ tsb -w # watch
 }
 ```
 * define entry with specific output alternate  
-```json
+```js
 {
     "entry": "./entry.ts",
     "output": "./bundled.[name].js", // output: "./bundled.entry.js"
