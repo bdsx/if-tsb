@@ -115,15 +115,21 @@ export function identifierValidating(name:string):string
     return name;
 }
 
+
+const EMPTY = {};
+
 export class ConcurrencyQueue
 {
     private idles = concurrencyCount;
     private readonly reserved:(()=>Promise<void>)[] = [];
     private endResolve:(()=>void)|null = null;
+    private endReject:((err:any)=>void)|null = null;
     private endPromise:Promise<void>|null = null;
     private idleResolve:(()=>void)|null = null;
+    private idleReject:((err:any)=>void)|null = null;
     private idlePromise:Promise<void>|null = null;
     private _ref = 0;
+    private _error:any = EMPTY;
 
     private readonly _next:()=>(Promise<void>|void) = ()=>{
         if (this.reserved.length === 0)
@@ -132,6 +138,7 @@ export class ConcurrencyQueue
             {
                 this.idleResolve();
                 this.idleResolve = null;
+                this.idleReject = null;
                 this.idlePromise = null;                
             }
             this.idles++;
@@ -139,7 +146,7 @@ export class ConcurrencyQueue
             return;
         }
         const task = this.reserved.shift()!;
-        return task().then(this._next);
+        return task().then(this._next, err=>this.error(err));
     };
 
     private _fireEnd():void
@@ -148,7 +155,25 @@ export class ConcurrencyQueue
         {
             this.endResolve();
             this.endResolve = null;
+            this.endReject = null;
             this.endPromise = null;
+        }
+    }
+
+    error(err:any):void
+    {
+        this._error = err;
+        if (this.endReject !== null)
+        {
+            this.endReject(err);
+            this.endResolve = null;
+            this.endReject = null;
+        }
+        if (this.idleReject !== null)
+        {
+            this.idleReject(err);
+            this.idleResolve = null;
+            this.idleReject = null;
         }
     }
 
@@ -156,6 +181,7 @@ export class ConcurrencyQueue
     {
         this._ref++;
     }
+
     unref():void
     {
         this._ref--;
@@ -165,18 +191,22 @@ export class ConcurrencyQueue
     onceHasIdle():Promise<void>
     {
         if (this.idlePromise !== null) return this.idlePromise;
+        if (this._error !== EMPTY) return this.idlePromise = Promise.reject(this._error);
         if (this.idles !== 0) return Promise.resolve();
-        return this.idlePromise = new Promise(resolve=>{
+        return this.idlePromise = new Promise((resolve, reject)=>{
             this.idleResolve = resolve;
+            this.idleReject = reject;
         });
     }
 
     onceEnd():Promise<void>
     {
         if (this.endPromise !== null) return this.endPromise;
+        if (this._error !== EMPTY) return this.endPromise = Promise.reject(this._error);
         if (this.idles === concurrencyCount) return Promise.resolve();
-        return this.endPromise = new Promise(resolve=>{
+        return this.endPromise = new Promise((resolve, reject)=>{
             this.endResolve = resolve;
+            this.endReject = reject;
         });
     }
 
@@ -379,7 +409,7 @@ _kindMap.set('.JS', ts.ScriptKind.JS);
 _kindMap.set('.JSX', ts.ScriptKind.JSX);
 _kindMap.set('.JSON', ts.ScriptKind.JSON);
 
-export function getScriptKind(filepath:string):{kind:ts.ScriptKind, filepath:string, ext:string}
+export function getScriptKind(filepath:string):{kind:ts.ScriptKind, ext:string}
 {
     let ext = path.extname(filepath).toUpperCase();
     let kind = _kindMap.get(ext) || ts.ScriptKind.Unknown;
@@ -389,14 +419,14 @@ export function getScriptKind(filepath:string):{kind:ts.ScriptKind, filepath:str
         const nidx = filepath.lastIndexOf('.', filepath.length - ext.length - 1);
         if (nidx !== -1)
         {
-            if (filepath.substr(nidx).toUpperCase() === '.D.TS')
+            const next = filepath.substr(nidx).toUpperCase();
+            if (next === '.D.TS')
             {
-                ext = '.JS';
-                kind = ts.ScriptKind.JS;
-                filepath = filepath.substr(0, filepath.length-ext.length+1)+'js';
+                ext = next;
+                kind = ts.ScriptKind.External;
             }
         }
         break;
     }
-    return {filepath, kind, ext};
+    return {kind, ext};
 }

@@ -56,7 +56,7 @@ export class TsBundlerRefined
         this.saving.run(async()=>{
             const writer = fs.createWriteStream(getCacheFilePath(this.id), 'utf-8');
             writer.on('error', err=>{
-                console.error(err);
+                bundler.taskQueue.error(err);
             });
             await write(writer, CACHE_SIGNATURE+'\n');
             await write(writer, this.dependency.join(path.delimiter)+'\n');
@@ -124,6 +124,7 @@ export class TsBundler
     private writer:fs.WriteStream|null = null;
     private lineOffset = 0;
     private mapgen:sourceMap.SourceMapGenerator|null = null;
+    private entryModule:TsBundlerModule|null = null;
 
     public readonly output:string;
     public readonly outdir:string;
@@ -151,6 +152,11 @@ export class TsBundler
         this.globalVarName = options.globalModuleVarName || '__tsb';
         this.clearConsole = options.clearConsole || false;
         this.verbose = options.verbose || false;
+    }
+
+    isEntryModule(module:TsBundlerModule):boolean
+    {
+        return this.entryModule === module;
     }
 
     private async _startWriting(firstLineComment:string|null):Promise<void>
@@ -298,7 +304,7 @@ if (module.exports) return module.exports;\n`;
             file:'./'+path.basename(this.output)
         });
         this.modules.clear();
-        const entryModule = this.add(this.entry);
+        this.entryModule = this.add(this.entry);
         await this.taskQueue.onceEnd();
         if (this.writer === null)
         {
@@ -307,7 +313,7 @@ if (module.exports) return module.exports;\n`;
             return false;
         }
         if (this.verbose) console.log(this.entry+': writing end');
-        await write(this.writer!, `\n};\nmodule.exports=${this.globalVarName}.${entryModule.id.varName}();\n//# sourceMappingURL=${path.basename(this.output)}.map`);
+        await write(this.writer!, `\n};\nmodule.exports=${this.globalVarName}.${this.entryModule.id.varName}();\n//# sourceMappingURL=${path.basename(this.output)}.map`);
         await new Promise<void>(resolve=>{
             let counter = 2;
             function done()
@@ -324,6 +330,7 @@ if (module.exports) return module.exports;\n`;
         if (this.verbose) console.log(this.entry+': done');
         this.writer = null;
         this.mapgen = null;
+        this.entryModule = null;
         return true;
     }
 
@@ -384,13 +391,25 @@ export class TsBundlerModule
             const info = module.resolvedModule;
             if (!info)
             {
-                const text = require.resolve(node.text);
-                if (builtin.has(text)) return base;
+                if (builtin.has(node.text)) return base;
                 this.error(_node, 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
                 return base;
-            }
+            }    
             if (info.isExternalLibraryImport) return base;
-            const source = this.bundler.add(info.resolvedFileName);
+
+            let filepath = info.resolvedFileName;
+            const kind = getScriptKind(filepath);
+            if (kind.kind === ts.ScriptKind.External)
+            {
+                filepath = filepath.substr(0, filepath.length-kind.ext.length+1)+'js';
+                if (!fs.existsSync(filepath))
+                {
+                    this.error(_node, 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
+                    return base;
+                }
+            }
+
+            const source = this.bundler.add(filepath);
             dependency.push(source.id.apath);
     
             return ctx.factory.createCallExpression(
@@ -447,9 +466,9 @@ export class TsBundlerModule
             return sourceFile=>ts.visitNode(sourceFile, visit);
         };
 
-        const info = getScriptKind(this.id.apath);
-        const filepath = info.filepath;
-
+        let filepath = this.id.apath;
+        const info = getScriptKind(filepath);
+        
         let source:string;
         try
         {
@@ -461,7 +480,7 @@ export class TsBundlerModule
             return null;
         }
 
-        const sourceFile = ts.createSourceFile(filepath, source, this.bundler.tsoptions.target!, undefined, info.kind); // TODO: GH#18217
+        const sourceFile = ts.createSourceFile(filepath, source, this.bundler.tsoptions.target!, undefined, info.kind);
         let sourceMapText:string|null = null;
         let outputText = '';
 
@@ -482,16 +501,29 @@ export class TsBundlerModule
             return this.bundler.refine(this, dependency, content, false, null);
         }
 
+        const bundler = this.bundler;
+        const isEntry = bundler.isEntryModule(this);
         const compilerHost:ts.CompilerHost = {
             getSourceFile(fileName) { 
                 return path.normalize(fileName) === filepath ? sourceFile : undefined;
             },
             writeFile(name, text) {
-                if (path.extname(name).toUpperCase() === '.MAP') {
-                    sourceMapText = text;
-                }
-                else {
+                const info = getScriptKind(name);
+                if (info.kind === ts.ScriptKind.JS) {
                     outputText = text;
+                }
+                else if (info.kind === ts.ScriptKind.External) {
+                    if (isEntry)
+                    {
+                        bundler.taskQueue.ref();
+                        if (bundler.verbose) console.log(`${name}: writing`);
+                        fs.promises.writeFile(name, text).then(()=>{
+                            bundler.taskQueue.unref();
+                        }, err=>bundler.taskQueue.error(err));
+                    }
+                }
+                else if (info.ext === '.MAP') {
+                    sourceMapText = text;
                 }
             },
             getDefaultLibFileName() { return 'lib.d.ts'; },

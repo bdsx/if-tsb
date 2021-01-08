@@ -10,11 +10,42 @@ tsb -w # watch
 
 
 ### tsconfig.json
+
+* define entry  
+```json
+{
+    "entry": "./entry.ts", // output: "./entry.bundle.js"
+    "compilerOptions": {
+        /* ... */
+    }
+}
+```
+* define multiple entry  
+```json
+{
+    "entry": ["./entry.ts", "./entry2.ts"], // output: "./entry.bundle.js", "./entry2.bundle.js"
+    "compilerOptions": {
+        /* ... */
+    }
+}
+```
+* define entry with specific output  
 ```json
 {
     "entry": {
-        "./entry.input.ts": "./bundled.output.js"
+        "./entry.ts": "./bundled.output.js",
+        "./entry2.ts": "./bundled.output2.js"
     },
+    "compilerOptions": {
+        /* ... */
+    }
+}
+```
+* define entry with specific output alternate  
+```json
+{
+    "entry": "./entry.ts",
+    "output": "./bundled.[name].js", // output: "./bundled.entry.js"
     "compilerOptions": {
         /* ... */
     }
