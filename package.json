@@ -1,6 +1,6 @@
 {
   "name": "if-tsb",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Insanely Fast TypeScript Bundler",
   "main": "./index.bundle.js",
   "bin": {
@@ -10,7 +10,15 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "ts-node ./cli"
   },
-  "keywords": [],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/karikera/if-tsb.git"
+  },
+  "keywords": [
+    "typescript",
+    "bundler",
+    "bundling"
+  ],
   "author": "",
   "license": "ISC",
   "devDependencies": {

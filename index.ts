@@ -406,6 +406,7 @@ if (module.exports) return module.exports;\n`;
         this.writer = null;
         this.mapgen = null;
         this.entryModule = null;
+        this.sourceFileCache.clear();
 
         // const sourceMapContent = await fs.promises.readFile(this.output+'.map', 'utf-8');
         // const content = await fs.promises.readFile(this.output, 'utf-8');
