@@ -7,7 +7,21 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Launch Program",
+            "name": "Bundle Self",
+            "console": "integratedTerminal",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "node_modules/ts-node/dist/bin.js",
+            "args": ["${workspaceFolder}\\cli.ts", "."],
+            "outFiles": [
+                "${workspaceFolder}/**/*.js"
+            ]
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Bundle BDSX",
             "console": "integratedTerminal",
             "skipFiles": [
                 "<node_internals>/**"

@@ -12,7 +12,7 @@ const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 
 const builtin = new Set<string>(require('module').builtinModules);
 
-const CACHE_SIGNATURE = '\ntsb-kr-cache-0.4';
+const CACHE_SIGNATURE = '\ntsb-kr-cache-0.5';
 
 function getCacheFilePath(id:TsBundlerModuleId):string
 {
@@ -227,20 +227,25 @@ export class TsBundler
 
     private async _startWriting(firstLineComment:string|null):Promise<void>
     {
-        await fs.promises.mkdir(this.outdir, {recursive:true});
-        this.writer = fs.createWriteStream(this.output, 'utf-8');
-        if (firstLineComment !== null)
+        await this._lock();
+        if (this.writer === null)
         {
-            await write(this.writer, firstLineComment+'\n');
+            await fs.promises.mkdir(this.outdir, {recursive:true});
+            this.writer = fs.createWriteStream(this.output, 'utf-8');
+            if (firstLineComment !== null)
+            {
+                await write(this.writer, firstLineComment+'\n');
+                this.lineOffset++;
+            }
+            if (this.tsoptions.alwaysStrict)
+            {
+                await write(this.writer, '"use strict";\n');
+                this.lineOffset++;
+            }
+            await write(this.writer, `const ${this.globalVarName} = {\n`);
             this.lineOffset++;
         }
-        if (this.tsoptions.alwaysStrict)
-        {
-            await write(this.writer, '"use strict";\n');
-            this.lineOffset++;
-        }
-        await write(this.writer, `const ${this.globalVarName} = {\n`);
-        this.lineOffset++;
+        this._unlock();
     }
 
     allocModuleVarName(name:string):string
@@ -265,21 +270,21 @@ export class TsBundler
     {
         if (this.writer === null)
         {
-            await this._lock();
             await this._startWriting(refined.firstLineComment);
-            this._unlock();
         }
         if (this.verbose) console.log(refined.id.apath+': writing');
         await this._lock();
         await write(this.writer!, refined.content);
+        const offset = this.lineOffset + refined.sourceMapOutputLineOffset;
+        this.lineOffset += refined.outputLineCount;
         this._unlock();
 
         if (refined.sourceMapText)
         {
             try
             {
-                const rpath = path.relative(this.outdir, refined.id.apath).replace(/\\/g, '/');
-                const offset = this.lineOffset + refined.sourceMapOutputLineOffset;
+                let rpath = path.relative(this.outdir, refined.id.apath).replace(/\\/g, '/');
+                // if (!path.isAbsolute(rpath) && !rpath.startsWith('.')) rpath = './'+rpath;
                 const consumer = new sourceMap.SourceMapConsumer(JSON.parse(refined.sourceMapText));
                 consumer.eachMapping(entry=>{
                   this.mapgen!.addMapping({
@@ -301,7 +306,6 @@ export class TsBundler
                 console.error(`${refined.id.apath}: Invalid source map (${refined.sourceMapText.substr(0, 16)})`);
             }
         }
-        this.lineOffset += refined.outputLineCount;
     }
 
     refine(module:TsBundlerModule, dependency:string[], content:string, selfExports:boolean, sourceMapText:string|null, doNotSave:boolean):TsBundlerRefined
@@ -346,14 +350,12 @@ export class TsBundler
         let sourceMapOutputLineOffset = 5;
         if (useStrict) sourceMapOutputLineOffset ++;
         if (!selfExports) sourceMapOutputLineOffset += 2;
-        let outputLineCount = sourceMapOutputLineOffset + 3 + content.split('\n').length;
         sourceMapOutputLineOffset -= stripedLine;
 
         const refined = new TsBundlerRefined(module.id);
         refined.dependency = dependency;
         refined.firstLineComment = firstLineComment;
         refined.sourceMapOutputLineOffset = sourceMapOutputLineOffset;
-        refined.outputLineCount = outputLineCount;
         refined.content = `////////////////////////////////////////////////////////////////
 // ${module.rpath}\n${refined.id.varName}(){\n`;
         if (useStrict) refined.content += '"use strict";\n';
@@ -363,6 +365,7 @@ if (module.exports) return module.exports;\n`;
         refined.content += content.substring(contentBegin, contentEnd);
         refined.content += '\nreturn module.exports;\n},\n';
         refined.sourceMapText = sourceMapText;
+        refined.outputLineCount = refined.content.split('\n').length-1;
         if (!doNotSave) refined.save(this);
         return refined;
     }
@@ -403,6 +406,18 @@ if (module.exports) return module.exports;\n`;
         this.writer = null;
         this.mapgen = null;
         this.entryModule = null;
+
+        // const sourceMapContent = await fs.promises.readFile(this.output+'.map', 'utf-8');
+        // const content = await fs.promises.readFile(this.output, 'utf-8');
+        // const validate = await import('sourcemap-validator');
+        // const modules:Record<string, string> = {};
+        // for (const module of this.modules.values())
+        // {
+        //     const rpath = path.relative(this.outdir, module.id.apath).replace(/\\/g, '/');
+        //     modules[rpath] = await fs.promises.readFile(module.id.apath, 'utf-8');
+        // }
+        // validate(content, sourceMapContent, modules);
+
         return true;
     }
 
