@@ -6,6 +6,7 @@ import sourceMap = require('source-map');
 import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind, changeExt, time } from './util';
 import findCacheDir = require('find-cache-dir');
 import colors = require('colors');
+import { performance } from 'perf_hooks';
 
 const cacheDir = findCacheDir({name: 'tsb-kr'}) || './.tsb-kr.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
@@ -23,6 +24,8 @@ export interface BundlerOptions
     verbose?:boolean;
     checkCircularDependency?:boolean;
     suppressDynamicImportErrors?:boolean;
+    faster?:boolean;
+    watchWaiting?:number;
     globalModuleVarName?:string;
 }
 
@@ -129,17 +132,19 @@ export class Bundler
     private readonly names = new Set<string>();
 
     private writer:fs.WriteStream|null = null;
-    private lineOffset = 0;
     private mapgen:sourceMap.SourceMapGenerator|null = null;
     private entryModule:BundlerModule|null = null;
+    private lineOffset = 0;
 
     public readonly output:string;
     public readonly outdir:string;
     public readonly globalVarName:string;
     public readonly clearConsole:boolean;
+    public readonly watchWaiting:number;
     public readonly verbose:boolean;
     public readonly checkCircularDependency:boolean;
     public readonly suppressDynamicImportErrors:boolean;
+    public readonly faster:boolean;
 
     public readonly modules = new Map<string, BundlerModule>();
     public readonly taskQueue = new ConcurrencyQueue;
@@ -170,6 +175,8 @@ export class Bundler
         this.verbose = boptions.verbose || false;
         this.checkCircularDependency = boptions.checkCircularDependency || false;
         this.suppressDynamicImportErrors = boptions.suppressDynamicImportErrors || false;
+        this.faster = boptions.faster || false;
+        this.watchWaiting = boptions.watchWaiting === undefined ? 20 : boptions.watchWaiting;
     }
 
     private _lock():Promise<void>
@@ -415,6 +422,7 @@ if (module.exports) return module.exports;\n`;
         this.writer = null;
         this.mapgen = null;
         this.entryModule = null;
+        this.lineOffset = 0;
         this.sourceFileCache.clear();
 
         // const sourceMapContent = await fs.promises.readFile(this.output+'.map', 'utf-8');
@@ -698,6 +706,12 @@ export class BundlerModule
         const compilerHostBase = ts.createCompilerHost(bundler.tsoptions);
         const compilerHost:ts.CompilerHost = {
             getSourceFile(fileName:string, languageVersion: ts.ScriptTarget, onError?: (message: string) => void, shouldCreateNewSourceFile?: boolean) {
+                if (bundler.faster)
+                {
+                    if (path.join(fileName) === filepath) return sourceFile;
+                    return undefined;
+                }
+
                 return bundler.getSourceFileSync(fileName, languageVersion);
             },
             writeFile(name:string, text:string) {
@@ -726,11 +740,15 @@ export class BundlerModule
             getDirectories(dirName:string) { return sys.getDirectories(dirName); }
         } as any;
         Object.setPrototypeOf(compilerHost, compilerHostBase);
-        const diagnostics:ts.Diagnostic[] = [];
+
+        const diagnostics:ts.Diagnostic[]|undefined = bundler.faster ? undefined : [];
         const program = ts.createProgram([filepath], this.bundler.tsoptions, compilerHost, undefined, diagnostics);
         
-        diagnostics.push(...program.getSyntacticDiagnostics(sourceFile));
-        // diagnostics.push(...program.getOptionsDiagnostics());
+        if (diagnostics !== undefined)
+        {
+            diagnostics.push(...program.getSyntacticDiagnostics(sourceFile));
+            // diagnostics.push(...program.getOptionsDiagnostics());
+        }
         
         program.emit(
             /*targetSourceFile*/ undefined, 
@@ -741,7 +759,7 @@ export class BundlerModule
                 after: [factory] 
             });
         
-        if (diagnostics.length !== 0)
+        if (diagnostics !== undefined && diagnostics.length !== 0)
         {
             doNotSave = true;
             this.bundler.main.reportFromDiagnostics(diagnostics);
@@ -1099,6 +1117,7 @@ export class BundlerMainContext
 
 export async function bundle(entries:string[], output?:string):Promise<void>
 {
+    const started = performance.now();
     const ctx = new BundlerMainContext;
     const bundlers:Bundler[] = [];
     for (const p of entries)
@@ -1121,6 +1140,8 @@ export async function bundle(entries:string[], output?:string):Promise<void>
     {
         console.error(ctx.getErrorCountString());
     }
+    const duration = performance.now()-started;
+    console.log(duration.toFixed(6)+'ms');
 }
 
 export function bundleWatch(entries:string[], output?:string):void
@@ -1136,6 +1157,7 @@ export function bundleWatch(entries:string[], output?:string):void
         
         async function bundle(bundlers:Bundler[]):Promise<void>
         {
+            const started = performance.now();
             watcher.pause();
             if (bundlers.length === 0)
             {
@@ -1163,11 +1185,14 @@ export function bundleWatch(entries:string[], output?:string):void
             ctx.errorCount = 0;
             ctx.saveCacheJson();
             watcher.resume();
+
+            const duration = performance.now()-started;
+            console.log(duration.toFixed(6)+'ms');
         }
 
         const clearConsole = bundlers.some(bundler=>bundler.clearConsole);
 
-        const watcher = new FilesWatcher<Bundler>(async(list)=>{
+        const watcher = new FilesWatcher<Bundler>(bundler.watchWaiting, async(list)=>{
             if (clearConsole) console.clear();
             console.log(`[${time()}] File change detected. Starting incremental compilation...`);
             bundle([...list].map(items=>items[0]));

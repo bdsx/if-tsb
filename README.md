@@ -63,7 +63,9 @@ tsb -w # build with watch
         "globalModuleVarName": "__tsb",
         "checkCircularDependency": false, 
         "suppressDynamicImportErrors": false, 
-        "cleanConsole": false,
+        "cleanConsole": false, // clean console before repeated by watch
+        "faster": false, // skip external parsing and reporting, cannot emit some d.ts with this
+        "watchWaiting": 30, // bundling after ${watchWaiting}ms from file modifying
         "verbose": false
     },
     "compilerOptions": {

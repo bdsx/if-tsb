@@ -314,8 +314,6 @@ export class SkipableTaskQueue
     }
 }
 
-const WATCH_WAITING = 100;
-
 class WatchItem<T>
 {
     public readonly targets = new Set<T>();
@@ -338,7 +336,7 @@ export class FilesWatcher<T>
     private timeout: NodeJS.Timeout|null = null;
     private paused = false;
 
-    constructor(private readonly onchange:(ev:IterableIterator<[T, string[]]>)=>void)
+    constructor(private readonly waiting = 100, private readonly onchange:(ev:IterableIterator<[T, string[]]>)=>void)
     {
     }
 
@@ -380,7 +378,7 @@ export class FilesWatcher<T>
                 }
                 this.modified.clear();
                 this.onchange(targets.entries());
-            }, WATCH_WAITING);
+            }, this.waiting);
         }
     }
 
