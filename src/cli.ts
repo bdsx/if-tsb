@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { bundle, bundleWatch, TsBundlerMainContext } from "./index";
+import { bundle, bundleWatch } from "./index";
 
 (async()=>{
 

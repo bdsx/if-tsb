@@ -136,6 +136,18 @@ export function instanceProxy(instance:any):void
     }
 }
 
+export function changeExt(filepath:string, ext:string):string
+{
+    const extidx = filepath.lastIndexOf('.');
+    const pathidx = filepath.lastIndexOf(path.sep);
+    if (extidx < pathidx) return filepath;
+    return filepath.substr(0, extidx+1)+ext;
+}
+
+export function time():string
+{
+    return new Date().toLocaleTimeString();
+}
 
 const EMPTY = {};
 

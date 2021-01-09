@@ -1,7 +1,7 @@
 {
     "entry": {
-        "./cli.ts": "./cli.bundle.js",
-        "./index.ts": "./index.bundle.js"
+        "./src/cli.ts": "./cli.bundle.js",
+        "./src/index.ts": "./index.bundle.js"
     },
     "verbose": true,
     "compilerOptions": {

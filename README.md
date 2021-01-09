@@ -59,10 +59,13 @@ tsb -w # build with watch
 {
     "entry": "./index.ts",
     "output": "[dirname]/[name].bundled.js",
-    "globalModuleVarName": "__tsb",
-    "checkCircularDependency": false, 
-    "cleanConsole": false,
-    "verbose": false,
+    "bundlerOptions": {
+        "globalModuleVarName": "__tsb",
+        "checkCircularDependency": false, 
+        "suppressDynamicImportErrors": false, 
+        "cleanConsole": false,
+        "verbose": false
+    },
     "compilerOptions": {
         /* ... */
     }

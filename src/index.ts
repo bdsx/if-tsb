@@ -3,31 +3,36 @@ import ts = require('typescript');
 import fs = require('fs');
 import path = require('path');
 import sourceMap = require('source-map');
-import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind } from './util';
+import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind, changeExt, time } from './util';
 import findCacheDir = require('find-cache-dir');
 import colors = require('colors');
 
 const cacheDir = findCacheDir({name: 'tsb-kr'}) || './.tsb-kr.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
-
 const builtin = new Set<string>(require('module').builtinModules);
-
 const CACHE_SIGNATURE = '\ntsb-kr-cache-0.5';
 
-function getCacheFilePath(id:TsBundlerModuleId):string
+function getCacheFilePath(id:BundlerModuleId):string
 {
     return path.join(cacheDir, id.number+'');
 }
 
-export interface TsBundlerOptions
+export interface BundlerOptions
 {
     clearConsole?:boolean;
     verbose?:boolean;
     checkCircularDependency?:boolean;
-    entry:string[]|Record<string, string>|string;
+    suppressDynamicImportErrors?:boolean;
     globalModuleVarName?:string;
+}
+
+export interface TsConfig
+{
+    entry:string[]|Record<string, string>|string;
     output?:string;
 
+    bundlerOptions?:BundlerOptions;
+    
     /**
      * compiler option override.
      * if not define it, it will load [cwd]/tsconfig.json
@@ -35,7 +40,7 @@ export interface TsBundlerOptions
     compilerOptions?:ts.CompilerOptions;
 }
 
-export class TsBundlerRefined
+export class BundlerRefined
 {
     firstLineComment:string|null;
     sourceMapOutputLineOffset:number;
@@ -44,13 +49,13 @@ export class TsBundlerRefined
     sourceMapText:string|null;
     content:string;
 
-    constructor(public readonly id:TsBundlerModuleId)
+    constructor(public readonly id:BundlerModuleId)
     {
     }
 
     private readonly saving = new SkipableTaskQueue;
 
-    save(bundler:TsBundler):void
+    save(bundler:Bundler):void
     {
         bundler.taskQueue.ref();
         this.saving.run(async()=>{
@@ -87,7 +92,7 @@ export class TsBundlerRefined
         this.content = source.substr(0, source.length - CACHE_SIGNATURE.length);
     }
     
-    static async loadCacheIfNotModified(id:TsBundlerModuleId):Promise<TsBundlerRefined|null>
+    static async loadCacheIfNotModified(id:BundlerModuleId):Promise<BundlerRefined|null>
     {
         try
         {
@@ -95,7 +100,7 @@ export class TsBundlerRefined
             const [cache, file] = await Promise.all([fs.promises.stat(cachepath), fs.promises.stat(id.apath)]);
             if (cache.mtime < file.mtime) return null;
             
-            const refined = new TsBundlerRefined(id);
+            const refined = new BundlerRefined(id);
             await refined.load();
             return refined;
         }
@@ -119,14 +124,14 @@ function writerEnd(writer:fs.WriteStream):Promise<void>
     return new Promise(resolve=>writer.end(resolve));
 }
 
-export class TsBundler
+export class Bundler
 {
     private readonly names = new Set<string>();
 
     private writer:fs.WriteStream|null = null;
     private lineOffset = 0;
     private mapgen:sourceMap.SourceMapGenerator|null = null;
-    private entryModule:TsBundlerModule|null = null;
+    private entryModule:BundlerModule|null = null;
 
     public readonly output:string;
     public readonly outdir:string;
@@ -134,8 +139,9 @@ export class TsBundler
     public readonly clearConsole:boolean;
     public readonly verbose:boolean;
     public readonly checkCircularDependency:boolean;
+    public readonly suppressDynamicImportErrors:boolean;
 
-    public readonly modules = new Map<string, TsBundlerModule>();
+    public readonly modules = new Map<string, BundlerModule>();
     public readonly taskQueue = new ConcurrencyQueue;
     private readonly sourceFileCache = new Map<string, ts.SourceFile>();
 
@@ -143,11 +149,11 @@ export class TsBundler
     private csEntered = false;
 
     constructor(
-        public readonly main:TsBundlerMainContext,
+        public readonly main:BundlerMainContext,
         public readonly basedir:string, 
         public readonly entry:string, 
         resolvedOutput:string,
-        options:TsBundlerOptions, 
+        options:TsConfig, 
         public readonly tsconfig:string|null,
         public readonly tsoptions:ts.CompilerOptions)
     {
@@ -157,10 +163,13 @@ export class TsBundler
         }
         this.output = resolvedOutput;
         this.outdir = path.dirname(this.output);
-        this.globalVarName = options.globalModuleVarName || '__tsb';
-        this.clearConsole = options.clearConsole || false;
-        this.verbose = options.verbose || false;
-        this.checkCircularDependency = options.checkCircularDependency || false;
+        const boptions = options.bundlerOptions || {};
+
+        this.globalVarName = boptions.globalModuleVarName || '__tsb';
+        this.clearConsole = boptions.clearConsole || false;
+        this.verbose = boptions.verbose || false;
+        this.checkCircularDependency = boptions.checkCircularDependency || false;
+        this.suppressDynamicImportErrors = boptions.suppressDynamicImportErrors || false;
     }
 
     private _lock():Promise<void>
@@ -197,7 +206,7 @@ export class TsBundler
         return path.isAbsolute(filepath) ? path.join(filepath) : path.join(this.basedir, filepath);
     }
 
-    isEntryModule(module:TsBundlerModule):boolean
+    isEntryModule(module:BundlerModule):boolean
     {
         return this.entryModule === module;
     }
@@ -266,7 +275,7 @@ export class TsBundler
         return name;
     }
     
-    async write(refined:TsBundlerRefined):Promise<void>
+    async write(refined:BundlerRefined):Promise<void>
     {
         if (this.writer === null)
         {
@@ -308,7 +317,7 @@ export class TsBundler
         }
     }
 
-    refine(module:TsBundlerModule, dependency:string[], content:string, selfExports:boolean, sourceMapText:string|null, doNotSave:boolean):TsBundlerRefined
+    refine(module:BundlerModule, dependency:string[], content:string, selfExports:boolean, sourceMapText:string|null, doNotSave:boolean):BundlerRefined
     {
         let contentBegin = 0;
         let contentEnd = content.length;
@@ -352,7 +361,7 @@ export class TsBundler
         if (!selfExports) sourceMapOutputLineOffset += 2;
         sourceMapOutputLineOffset -= stripedLine;
 
-        const refined = new TsBundlerRefined(module.id);
+        const refined = new BundlerRefined(module.id);
         refined.dependency = dependency;
         refined.firstLineComment = firstLineComment;
         refined.sourceMapOutputLineOffset = sourceMapOutputLineOffset;
@@ -422,7 +431,7 @@ if (module.exports) return module.exports;\n`;
         return true;
     }
 
-    add(parent:TsBundlerModule|null, filepath:string):{module:TsBundlerModule, circularDependency: boolean}
+    add(parent:BundlerModule|null, filepath:string):{module:BundlerModule, circularDependency: boolean}
     {
         const apath = path.resolve(this.basedir, filepath);
         let module = this.modules.get(apath);
@@ -441,21 +450,21 @@ if (module.exports) return module.exports;\n`;
             }
             return {module, circularDependency: false,};
         }
-        module = new TsBundlerModule(this, parent, apath);
+        module = new BundlerModule(this, parent, apath);
         this.modules.set(apath, module);
         this.taskQueue.run(()=>module!.load());
         return {module, circularDependency: false};
     }
 }
 
-export class TsBundlerModule
+export class BundlerModule
 {
-    public readonly id:TsBundlerModuleId;
+    public readonly id:BundlerModuleId;
     public readonly rpath:string;
 
     constructor(
-        public readonly bundler:TsBundler, 
-        public readonly parent:TsBundlerModule|null, 
+        public readonly bundler:Bundler, 
+        public readonly parent:BundlerModule|null, 
         apath:string)
     {
         this.id = bundler.main.getModuleId(bundler, apath);
@@ -484,9 +493,9 @@ export class TsBundlerModule
         this.bundler.main.report(this.rpath, linenum, pos.character, code, message, lineText, width);
     }
 
-    getParents():TsBundlerModule[]
+    getParents():BundlerModule[]
     {
-        const out:TsBundlerModule[] = [this];
+        const out:BundlerModule[] = [this];
 
         let node = this.parent;
         while (node !== null)
@@ -497,7 +506,7 @@ export class TsBundlerModule
         return out;
     }
 
-    private async _refine():Promise<TsBundlerRefined|null>
+    private async _refine():Promise<BundlerRefined|null>
     {
         let doNotSave = false;
         const bundler = this.bundler;
@@ -546,8 +555,11 @@ export class TsBundlerModule
             const importFromStringLiteral = (_node:ts.Node, base:ts.Node):ts.Node=>{
                 if (_node.kind !== ts.SyntaxKind.StringLiteral)
                 {
-                    doNotSave = true;
-                    this.error(findPositionedNode(), 1005, `Does not support dynamic import, (${ts.SyntaxKind[_node.kind]} is not string literal)`);
+                    if (!bundler.suppressDynamicImportErrors)
+                    {
+                        doNotSave = true;
+                        this.error(findPositionedNode(), 20001, `if-tsb does not support dynamic import for local module, (${ts.SyntaxKind[_node.kind]} is not string literal)`);
+                    }
                     return base;
                 }
                 const node = _node as ts.StringLiteral;
@@ -686,8 +698,7 @@ export class TsBundlerModule
         const compilerHostBase = ts.createCompilerHost(bundler.tsoptions);
         const compilerHost:ts.CompilerHost = {
             getSourceFile(fileName:string, languageVersion: ts.ScriptTarget, onError?: (message: string) => void, shouldCreateNewSourceFile?: boolean) {
-                if (bundler.resolvePath(fileName) === filepath) return sourceFile;
-                return undefined;
+                return bundler.getSourceFileSync(fileName, languageVersion);
             },
             writeFile(name:string, text:string) {
                 const info = getScriptKind(name);
@@ -699,7 +710,7 @@ export class TsBundlerModule
                     {
                         bundler.taskQueue.ref();
                         if (bundler.verbose) console.log(`${name}: writing`);
-                        fs.promises.writeFile(name, text).then(()=>{
+                        fs.promises.writeFile(changeExt(bundler.output, 'd.ts'), text).then(()=>{
                             bundler.taskQueue.unref();
                         }, err=>bundler.taskQueue.error(err));
                     }
@@ -743,9 +754,9 @@ export class TsBundlerModule
         return this.bundler.refine(this, dependency, outputText, false, sourceMapText, doNotSave);
     }
 
-    async refine():Promise<TsBundlerRefined|null>
+    async refine():Promise<BundlerRefined|null>
     {
-        let refined = await TsBundlerRefined.loadCacheIfNotModified(this.id);
+        let refined = await BundlerRefined.loadCacheIfNotModified(this.id);
         if (refined !== null)
         {
             for (const dep of refined.dependency)
@@ -768,17 +779,17 @@ export class TsBundlerModule
     }
 }
 
-export interface TsBundlerModuleId
+export interface BundlerModuleId
 {
     number:number;
     varName:string;
     apath:string;
 }
 
-export class TsBundlerMainContext
+export class BundlerMainContext
 {
     public errorCount = 0;
-    private readonly cache:Record<string, Record<string,TsBundlerModuleId>>;
+    private readonly cache:Record<string, Record<string,BundlerModuleId>>;
     private readonly cacheUnusingId:number[] = [];
     private cahceIdCounter = -1;
     private cacheJsonModified = false;
@@ -829,7 +840,7 @@ export class TsBundlerMainContext
         this.cacheJsonModified = false;
         fs.mkdirSync(cacheDir, {recursive: true});
 
-        const output:Record<string, Record<string,TsBundlerModuleId>> = {};
+        const output:Record<string, Record<string,BundlerModuleId>> = {};
         for (const outpath in this.cache)
         {
             const cache = this.cache[outpath];
@@ -900,7 +911,7 @@ export class TsBundlerMainContext
             return `Found ${this.errorCount} errors`;
     }
 
-    getModuleId(bundler:TsBundler, apath:string):TsBundlerModuleId
+    getModuleId(bundler:Bundler, apath:string):BundlerModuleId
     {
         let map = this.cache[bundler.entry];
         if (!map) this.cache[bundler.entry] = map = {};
@@ -933,7 +944,7 @@ export class TsBundlerMainContext
         return id;
     }
 
-    private _makeBundlers(options:TsBundlerOptions, basedir:string, tsconfig:string|null, compilerOptions:ts.CompilerOptions):TsBundler[]
+    private _makeBundlers(options:TsConfig, basedir:string, tsconfig:string|null, compilerOptions:ts.CompilerOptions):Bundler[]
     {
         const varmap = new Map<string, string>();
 
@@ -976,7 +987,7 @@ export class TsBundlerMainContext
             }
             entry = out;
         }
-        const bundlers:TsBundler[] = [];
+        const bundlers:Bundler[] = [];
         for (const entryfile in entry)
         {
             const output = entry[entryfile];
@@ -988,7 +999,7 @@ export class TsBundlerMainContext
             }
             try
             {
-                const bundler = new TsBundler(this, basedir, entryfile, resolvedOutput, options, tsconfig, compilerOptions);
+                const bundler = new Bundler(this, basedir, entryfile, resolvedOutput, options, tsconfig, compilerOptions);
                 bundlers.push(bundler);
             }
             catch (err)
@@ -999,7 +1010,7 @@ export class TsBundlerMainContext
         return bundlers;
     }
 
-    makeBundlersWithPath(configPath:string, output?:string):TsBundler[]
+    makeBundlersWithPath(configPath:string, output?:string):Bundler[]
     {
         configPath = path.resolve(configPath);
         let basedir:string;
@@ -1033,7 +1044,7 @@ export class TsBundlerMainContext
                 {
                     console.error(ts.formatDiagnosticsWithColorAndContext([configFile.error], defaultFormatHost));
                 }
-                const options = configFile.config as TsBundlerOptions;
+                const options = configFile.config as TsConfig;
                 if (output) options.output = output;
                 return this._makeBundlers(
                     options, 
@@ -1057,7 +1068,7 @@ export class TsBundlerMainContext
         }
     }
 
-    makeBundlers(options:TsBundlerOptions):TsBundler[]
+    makeBundlers(options:TsConfig):Bundler[]
     {
         let tsoptions:ts.CompilerOptions;
         let tsconfig:string|null = null;
@@ -1088,8 +1099,8 @@ export class TsBundlerMainContext
 
 export async function bundle(entries:string[], output?:string):Promise<void>
 {
-    const ctx = new TsBundlerMainContext;
-    const bundlers:TsBundler[] = [];
+    const ctx = new BundlerMainContext;
+    const bundlers:Bundler[] = [];
     for (const p of entries)
     {
         bundlers.push(...ctx.makeBundlersWithPath(p, output));
@@ -1112,23 +1123,18 @@ export async function bundle(entries:string[], output?:string):Promise<void>
     }
 }
 
-function time():string
-{
-    return new Date().toLocaleTimeString();
-}
-
 export function bundleWatch(entries:string[], output?:string):void
 {
     (async()=>{
-        const ctx = new TsBundlerMainContext;
-        const bundlers:TsBundler[] = [];
+        const ctx = new BundlerMainContext;
+        const bundlers:Bundler[] = [];
         for (const p of entries)
         {
             bundlers.push(...ctx.makeBundlersWithPath(p, output));
         }
         if (bundlers.length === 0) return;
         
-        async function bundle(bundlers:TsBundler[]):Promise<void>
+        async function bundle(bundlers:Bundler[]):Promise<void>
         {
             watcher.pause();
             if (bundlers.length === 0)
@@ -1161,7 +1167,7 @@ export function bundleWatch(entries:string[], output?:string):void
 
         const clearConsole = bundlers.some(bundler=>bundler.clearConsole);
 
-        const watcher = new FilesWatcher<TsBundler>(async(list)=>{
+        const watcher = new FilesWatcher<Bundler>(async(list)=>{
             if (clearConsole) console.clear();
             console.log(`[${time()}] File change detected. Starting incremental compilation...`);
             bundle([...list].map(items=>items[0]));
