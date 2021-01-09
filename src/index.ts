@@ -140,7 +140,7 @@ export class Bundler
     public readonly outdir:string;
     public readonly globalVarName:string;
     public readonly clearConsole:boolean;
-    public readonly watchWaiting:number;
+    public readonly watchWaiting:number|undefined;
     public readonly verbose:boolean;
     public readonly checkCircularDependency:boolean;
     public readonly suppressDynamicImportErrors:boolean;
@@ -176,7 +176,7 @@ export class Bundler
         this.checkCircularDependency = boptions.checkCircularDependency || false;
         this.suppressDynamicImportErrors = boptions.suppressDynamicImportErrors || false;
         this.faster = boptions.faster || false;
-        this.watchWaiting = boptions.watchWaiting === undefined ? 20 : boptions.watchWaiting;
+        this.watchWaiting = boptions.watchWaiting;
     }
 
     private _lock():Promise<void>
@@ -1190,9 +1190,22 @@ export function bundleWatch(entries:string[], output?:string):void
             console.log(duration.toFixed(6)+'ms');
         }
 
-        const clearConsole = bundlers.some(bundler=>bundler.clearConsole);
+        let clearConsole = false;
+        let watchWaiting = 0;
+        let watchWaitingCount = 0;
+        for (const bundler of bundlers)
+        {
+            if (bundler.clearConsole) clearConsole = true;
+            if (bundler.watchWaiting !== undefined)
+            {
+                watchWaiting += bundler.watchWaiting;
+                watchWaitingCount ++;
+            }
+        }
+        if (watchWaitingCount === 0) watchWaiting = 30;
+        else watchWaiting /= watchWaitingCount;
 
-        const watcher = new FilesWatcher<Bundler>(bundler.watchWaiting, async(list)=>{
+        const watcher = new FilesWatcher<Bundler>(watchWaiting, async(list)=>{
             if (clearConsole) console.clear();
             console.log(`[${time()}] File change detected. Starting incremental compilation...`);
             bundle([...list].map(items=>items[0]));
