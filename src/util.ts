@@ -462,6 +462,16 @@ export function getScriptKind(filepath:string):{kind:ts.ScriptKind, ext:string}
     return {kind, ext};
 }
 
+function processMkdirError(dirname:string, err:any):boolean
+{
+    if (err.code === 'EEXIST') {
+        return true;
+    }
+    if (err.code === 'ENOENT') {
+        throw new Error(`EACCES: permission denied, mkdir '${dirname}'`);
+    }
+    return false;
+}
 
 export namespace fsp
 {
@@ -504,24 +514,30 @@ export namespace fsp
         for (;;)
         {
             const nextsep = dirpath.indexOf(sep, index);
-            if (nextsep === -1) break;
+            if (nextsep === -1)
+            {
+                try {
+                    await fsp.mkdir(dirpath);
+                } catch (err) {
+                    if (!processMkdirError(dirpath, err))
+                    {
+                        throw err;
+                    }
+                }
+                break;
+            }
             index = nextsep+1;
             const dirname = dirpath.substr(0, nextsep);
             try {
-            await fsp.mkdir(dirname);
+                await fsp.mkdir(dirname);
             } catch (err) {
-            if (err.code === 'EEXIST') {
-                continue;
+                if (!processMkdirError(dirname, err))
+                {
+                    if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
+                        throw err;
+                    }
+                }
             }
-            if (err.code === 'ENOENT') {
-                throw new Error(`EACCES: permission denied, mkdir '${dirname}'`);
-            }
-            const caughtErr = ['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) > -1;
-            if (!caughtErr || caughtErr && dirname === path.resolve(dirpath)) {
-                throw err;
-            }
-            }
-
         }
     }
 }
@@ -536,23 +552,29 @@ export function mkdirRecursiveSync(dirpath:string):void {
     for (;;)
     {
         const nextsep = dirpath.indexOf(sep, index);
-        if (nextsep === -1) break;
+        if (nextsep === -1)
+        {
+            try {
+                fs.mkdirSync(dirpath);
+            } catch (err) {
+                if (!processMkdirError(dirpath, err))
+                {
+                    throw err;
+                }
+            }
+            break;
+        }
         index = nextsep+1;
         const dirname = dirpath.substr(0, nextsep);
         try {
             fs.mkdirSync(dirname);
         } catch (err) {
-        if (err.code === 'EEXIST') {
-            continue;
+            if (!processMkdirError(dirname, err))
+            {
+                if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
+                    throw err;
+                }
+            }
         }
-        if (err.code === 'ENOENT') {
-            throw new Error(`EACCES: permission denied, mkdir '${dirname}'`);
-        }
-        const caughtErr = ['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) > -1;
-        if (!caughtErr || caughtErr && dirname === path.resolve(dirpath)) {
-            throw err;
-        }
-        }
-
     }
 }
