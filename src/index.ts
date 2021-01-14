@@ -4,11 +4,11 @@ import fs = require('fs');
 import path = require('path');
 import sourceMap = require('source-map');
 import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind, changeExt, time } from './util';
-import findCacheDir = require('find-cache-dir');
 import colors = require('colors');
 import { performance } from 'perf_hooks';
+import { findCacheDir } from './findcachedir';
 
-const cacheDir = findCacheDir({name: 'if-tsb'}) || './.if-tsb.cache';
+const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
 const CACHE_SIGNATURE = '\ntsb-kr-cache-0.5';
