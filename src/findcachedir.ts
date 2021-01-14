@@ -51,7 +51,7 @@ function getNodeModuleDirectory(directory:string) {
 }
 
 export function findCacheDir(name:string) {
-	if (env.CACHE_DIR && !['true', 'false', '1', '0'].includes(env.CACHE_DIR)) {
+	if (env.CACHE_DIR && ['true', 'false', '1', '0'].indexOf(env.CACHE_DIR) === -1) {
 		return path.join(env.CACHE_DIR, 'find-cache-dir');
 	}
 

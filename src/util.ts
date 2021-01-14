@@ -333,7 +333,7 @@ export class FilesWatcher<T>
 {
     private readonly watching = new Map<string, WatchItem<T>>();
     private readonly modified = new Set<WatchItem<T>>();
-    private timeout: NodeJS.Timeout|null = null;
+    private timeout: NodeJS.Timer|null = null;
     private paused = false;
 
     constructor(private readonly waiting = 100, private readonly onchange:(ev:IterableIterator<[T, string[]]>)=>void)
@@ -460,4 +460,99 @@ export function getScriptKind(filepath:string):{kind:ts.ScriptKind, ext:string}
         break;
     }
     return {kind, ext};
+}
+
+
+export namespace fsp
+{
+    export function mkdir(path:string):Promise<void>
+    {
+        return new Promise((resolve, reject)=>fs.mkdir(path, (err)=>{
+            if (err) reject(err);
+            else resolve();
+        }))
+    }
+    export function readFile(path:string):Promise<string>
+    {
+        return new Promise((resolve, reject)=>fs.readFile(path, 'utf-8', (err, data)=>{
+            if (err) reject(err);
+            else resolve(data);
+        }))
+    }
+    export function writeFile(path:string, data:string):Promise<void>
+    {
+        return new Promise((resolve, reject)=>fs.writeFile(path, data, 'utf-8', (err)=>{
+            if (err) reject(err);
+            else resolve();
+        }))
+    }
+    export function stat(path:string):Promise<fs.Stats>
+    {
+        return new Promise((resolve, reject)=>fs.stat(path, (err, data)=>{
+            if (err) reject(err);
+            else resolve(data);
+        }))
+    }
+        
+    export async function mkdirRecursive(dirpath:string):Promise<void> {
+        const sep = path.sep;
+        dirpath = path.resolve(dirpath);
+        
+        let index = dirpath.indexOf(sep)+1;
+        if (index === 0) return;
+
+        for (;;)
+        {
+            const nextsep = dirpath.indexOf(sep, index);
+            if (nextsep === -1) break;
+            index = nextsep+1;
+            const dirname = dirpath.substr(0, nextsep);
+            try {
+            await fsp.mkdir(dirname);
+            } catch (err) {
+            if (err.code === 'EEXIST') {
+                continue;
+            }
+            if (err.code === 'ENOENT') {
+                throw new Error(`EACCES: permission denied, mkdir '${dirname}'`);
+            }
+            const caughtErr = ['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) > -1;
+            if (!caughtErr || caughtErr && dirname === path.resolve(dirpath)) {
+                throw err;
+            }
+            }
+
+        }
+    }
+}
+
+export function mkdirRecursiveSync(dirpath:string):void {
+    const sep = path.sep;
+    dirpath = path.resolve(dirpath);
+    
+    let index = dirpath.indexOf(sep)+1;
+    if (index === 0) return;
+    
+    for (;;)
+    {
+        const nextsep = dirpath.indexOf(sep, index);
+        if (nextsep === -1) break;
+        index = nextsep+1;
+        const dirname = dirpath.substr(0, nextsep);
+        try {
+            fs.mkdirSync(dirname);
+        } catch (err) {
+        if (err.code === 'EEXIST') {
+            continue;
+        }
+        if (err.code === 'ENOENT') {
+            throw new Error(`EACCES: permission denied, mkdir '${dirname}'`);
+        }
+        const caughtErr = ['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) > -1;
+        if (!caughtErr || caughtErr && dirname === path.resolve(dirpath)) {
+            throw err;
+        }
+        }
+
+    }
 }

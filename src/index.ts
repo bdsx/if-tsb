@@ -3,7 +3,7 @@ import ts = require('typescript');
 import fs = require('fs');
 import path = require('path');
 import sourceMap = require('source-map');
-import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind, changeExt, time } from './util';
+import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind, changeExt, time, fsp, mkdirRecursiveSync } from './util';
 import colors = require('colors');
 import { findCacheDir } from './findcachedir';
 
@@ -61,8 +61,8 @@ export class BundlerRefined
     {
         bundler.taskQueue.ref();
         this.saving.run(async()=>{
-            const writer = fs.createWriteStream(getCacheFilePath(this.id), 'utf-8');
-            writer.on('error', err=>{
+            const writer = fs.createWriteStream(getCacheFilePath(this.id), {encoding: 'utf-8'});
+            writer.on('error', (err:Error)=>{
                 bundler.taskQueue.error(err);
             });
             await write(writer, this.dependency.join(path.delimiter)+'\n');
@@ -80,7 +80,7 @@ export class BundlerRefined
     async load():Promise<void>
     {
         const cachepath = getCacheFilePath(this.id);
-        const content = await fs.promises.readFile(cachepath, 'utf-8');
+        const content = await fsp.readFile(cachepath);
         if (!content.endsWith(CACHE_SIGNATURE)) throw Error('Outdated cache or failed data');
         const splited = splitContent(content, 6, '\n');
         content.endsWith('')
@@ -99,7 +99,7 @@ export class BundlerRefined
         try
         {
             const cachepath = getCacheFilePath(id);
-            const [cache, file] = await Promise.all([fs.promises.stat(cachepath), fs.promises.stat(id.apath)]);
+            const [cache, file] = await Promise.all([fsp.stat(cachepath), fsp.stat(id.apath)]);
             if (cache.mtime < file.mtime) return null;
             
             const refined = new BundlerRefined(id);
@@ -222,7 +222,7 @@ export class Bundler
         let sourceFile = this.sourceFileCache.get(filepath);
         if (sourceFile) return sourceFile;
         
-        const source = await fs.promises.readFile(filepath, 'utf-8');
+        const source = await fsp.readFile(filepath);
         sourceFile = ts.createSourceFile(filepath, source, this.tsoptions.target!);
         this.sourceFileCache.set(filepath, sourceFile);
         
@@ -245,8 +245,8 @@ export class Bundler
         await this._lock();
         if (this.writer === null)
         {
-            await fs.promises.mkdir(this.outdir, {recursive:true});
-            this.writer = fs.createWriteStream(this.output, 'utf-8');
+            await fsp.mkdirRecursive(this.outdir);
+            this.writer = fs.createWriteStream(this.output, {encoding: 'utf-8'});
             if (firstLineComment !== null)
             {
                 await write(this.writer, firstLineComment+'\n');
@@ -424,14 +424,14 @@ if (module.exports) return module.exports;\n`;
         this.lineOffset = 0;
         this.sourceFileCache.clear();
 
-        // const sourceMapContent = await fs.promises.readFile(this.output+'.map', 'utf-8');
-        // const content = await fs.promises.readFile(this.output, 'utf-8');
+        // const sourceMapContent = await fsp.readFile(this.output+'.map', 'utf-8');
+        // const content = await fsp.readFile(this.output, 'utf-8');
         // const validate = await import('sourcemap-validator');
         // const modules:Record<string, string> = {};
         // for (const module of this.modules.values())
         // {
         //     const rpath = path.relative(this.outdir, module.id.apath).replace(/\\/g, '/');
-        //     modules[rpath] = await fs.promises.readFile(module.id.apath, 'utf-8');
+        //     modules[rpath] = await fsp.readFile(module.id.apath, 'utf-8');
         // }
         // validate(content, sourceMapContent, modules);
 
@@ -723,7 +723,7 @@ export class BundlerModule
                     {
                         bundler.taskQueue.ref();
                         if (bundler.verbose) console.log(`${name}: writing`);
-                        fs.promises.writeFile(changeExt(bundler.output, 'd.ts'), text).then(()=>{
+                        fsp.writeFile(changeExt(bundler.output, 'd.ts'), text).then(()=>{
                             bundler.taskQueue.unref();
                         }, err=>bundler.taskQueue.error(err));
                     }
@@ -1115,7 +1115,7 @@ export class BundlerMainContext
 
 export async function bundle(entries:string[], output?:string):Promise<void>
 {
-    fs.mkdirSync(cacheDir, {recursive: true});
+    mkdirRecursiveSync(cacheDir);
     const started = process.hrtime();
     const ctx = new BundlerMainContext;
     const bundlers:Bundler[] = [];
@@ -1140,12 +1140,12 @@ export async function bundle(entries:string[], output?:string):Promise<void>
         console.error(ctx.getErrorCountString());
     }
     const duration = process.hrtime(started);
-    console.log((duration[0]*1000+duration[1]/1000).toFixed(6)+'ms');
+    console.log((duration[0]*1000+duration[1]/1000000).toFixed(6)+'ms');
 }
 
 export function bundleWatch(entries:string[], output?:string):void
 {
-    fs.mkdirSync(cacheDir, {recursive: true});
+    mkdirRecursiveSync(cacheDir);
     (async()=>{
         const ctx = new BundlerMainContext;
         const bundlers:Bundler[] = [];
@@ -1187,7 +1187,7 @@ export function bundleWatch(entries:string[], output?:string):void
             watcher.resume();
 
             const duration = process.hrtime(started);
-            console.log((duration[0]*1000+duration[1]/1000).toFixed(6)+'ms');
+            console.log((duration[0]*1000+duration[1]/1000000).toFixed(6)+'ms');
         }
 
         let clearConsole = false;
@@ -1206,7 +1206,11 @@ export function bundleWatch(entries:string[], output?:string):void
         else watchWaiting /= watchWaitingCount;
 
         const watcher = new FilesWatcher<Bundler>(watchWaiting, async(list)=>{
-            if (clearConsole) console.clear();
+            if (clearConsole)
+            {
+                if ((console as any).clear) (console as any).clear();
+                else console.log(`node@${process.version} does not support console.clear`);
+            }
             console.log(`[${time()}] File change detected. Starting incremental compilation...`);
             bundle([...list].map(items=>items[0]));
         });
