@@ -64,7 +64,7 @@ tsb -w # build with watch
         "checkCircularDependency": false, 
         "suppressDynamicImportErrors": false, 
         "cleanConsole": false, // clean console before repeated by watch
-        "faster": false, // skip external parsing and reporting, cannot emit some d.ts with this
+        "faster": false, // skip external parsing and reporting, cannot emit some d.ts and will not replace enum const
         "watchWaiting": 30, // bundling after ${watchWaiting}ms from file modifying
         "verbose": false
     },

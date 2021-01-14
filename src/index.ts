@@ -8,7 +8,7 @@ import findCacheDir = require('find-cache-dir');
 import colors = require('colors');
 import { performance } from 'perf_hooks';
 
-const cacheDir = findCacheDir({name: 'tsb-kr'}) || './.tsb-kr.cache';
+const cacheDir = findCacheDir({name: 'if-tsb'}) || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
 const CACHE_SIGNATURE = '\ntsb-kr-cache-0.5';
@@ -856,7 +856,6 @@ export class BundlerMainContext
     {
         if (!this.cacheJsonModified) return;
         this.cacheJsonModified = false;
-        fs.mkdirSync(cacheDir, {recursive: true});
 
         const output:Record<string, Record<string,BundlerModuleId>> = {};
         for (const outpath in this.cache)
@@ -1117,6 +1116,7 @@ export class BundlerMainContext
 
 export async function bundle(entries:string[], output?:string):Promise<void>
 {
+    fs.mkdirSync(cacheDir, {recursive: true});
     const started = performance.now();
     const ctx = new BundlerMainContext;
     const bundlers:Bundler[] = [];
@@ -1146,6 +1146,7 @@ export async function bundle(entries:string[], output?:string):Promise<void>
 
 export function bundleWatch(entries:string[], output?:string):void
 {
+    fs.mkdirSync(cacheDir, {recursive: true});
     (async()=>{
         const ctx = new BundlerMainContext;
         const bundlers:Bundler[] = [];

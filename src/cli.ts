@@ -22,7 +22,7 @@ import { bundle, bundleWatch } from "./index";
                 output = process.argv[i++];
                 if (!output)
                 {
-                    console.error(`tsb-kr: need a filepath after -o`);
+                    console.error(`if-tsb: need a filepath after -o`);
                     error = true;
                 }
                 break;
@@ -30,7 +30,7 @@ import { bundle, bundleWatch } from "./index";
                 watch = true;
                 break;
             default:
-                console.error(`tsb-kr: unknown options: ${v}`);
+                console.error(`if-tsb: unknown options: ${v}`);
                 error = true;
                 break;
             }
