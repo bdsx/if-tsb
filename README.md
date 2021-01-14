@@ -3,12 +3,12 @@ if-tsb is Bundler for TypeScript.
 
 ```sh
 npm i -g if-tsb # install
-tsb # build
-tsb . # build with specific path
-tsb ./index.ts # build with specific entry
-tsb ./tsconfig.json # build with specific tsconfig.json
-tsb -o ./output.js # build with specific output
-tsb -w # build with watch
+if-tsb # build
+if-tsb . # build with specific path
+if-tsb ./index.ts # build with specific entry
+if-tsb ./tsconfig.json # build with specific tsconfig.json
+if-tsb -o ./output.js # build with specific output
+if-tsb -w # build with watch
 ```
 
 

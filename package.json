@@ -1,10 +1,11 @@
 {
   "name": "if-tsb",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Insanely Fast TypeScript Bundler",
   "main": "./index.bundle.js",
   "bin": {
-    "tsb": "./cli.bundle.js"
+    "tsb": "./cli.bundle.js",
+    "if-tsb": "./cli.bundle.js"
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
