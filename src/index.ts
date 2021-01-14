@@ -5,7 +5,6 @@ import path = require('path');
 import sourceMap = require('source-map');
 import { ConcurrencyQueue, defaultFormatHost, identifierValidating, SkipableTaskQueue, splitContent, FilesWatcher, getScriptKind, changeExt, time } from './util';
 import colors = require('colors');
-import { performance } from 'perf_hooks';
 import { findCacheDir } from './findcachedir';
 
 const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
@@ -1117,7 +1116,7 @@ export class BundlerMainContext
 export async function bundle(entries:string[], output?:string):Promise<void>
 {
     fs.mkdirSync(cacheDir, {recursive: true});
-    const started = performance.now();
+    const started = process.hrtime();
     const ctx = new BundlerMainContext;
     const bundlers:Bundler[] = [];
     for (const p of entries)
@@ -1140,8 +1139,8 @@ export async function bundle(entries:string[], output?:string):Promise<void>
     {
         console.error(ctx.getErrorCountString());
     }
-    const duration = performance.now()-started;
-    console.log(duration.toFixed(6)+'ms');
+    const duration = process.hrtime(started);
+    console.log((duration[0]*1000+duration[1]/1000).toFixed(6)+'ms');
 }
 
 export function bundleWatch(entries:string[], output?:string):void
@@ -1158,7 +1157,7 @@ export function bundleWatch(entries:string[], output?:string):void
         
         async function bundle(bundlers:Bundler[]):Promise<void>
         {
-            const started = performance.now();
+            const started = process.hrtime();
             watcher.pause();
             if (bundlers.length === 0)
             {
@@ -1187,8 +1186,8 @@ export function bundleWatch(entries:string[], output?:string):void
             ctx.saveCacheJson();
             watcher.resume();
 
-            const duration = performance.now()-started;
-            console.log(duration.toFixed(6)+'ms');
+            const duration = process.hrtime(started);
+            console.log((duration[0]*1000+duration[1]/1000).toFixed(6)+'ms');
         }
 
         let clearConsole = false;
