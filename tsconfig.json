@@ -5,8 +5,8 @@
     },
     "verbose": true,
     "compilerOptions": {
-        "target": "es2017",
-        "lib": [ "es2017" ],
+        "target": "ES2015",
+        "lib": [ "ES2015" ],
         "module": "CommonJS",
         "moduleResolution": "Node",
         "alwaysStrict": true,
