@@ -403,6 +403,7 @@ if (module.exports) return module.exports;\n`;
         this.mapgen = new sourceMap.SourceMapGenerator({
             file:'./'+path.basename(this.output)
         });
+        this.modules.clear(); // must not clear at end, it's accessed by the watcher
         this.entryModule = this.add(null, this.entry).module;
 
         await this.taskQueue.onceEnd();
@@ -431,7 +432,6 @@ if (module.exports) return module.exports;\n`;
         this.writer = null;
         this.mapgen = null;
         this.entryModule = null;
-        this.modules.clear();
         this.sourceFileCache.clear();
 
         // const sourceMapContent = await fsp.readFile(this.output+'.map', 'utf-8');
