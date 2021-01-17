@@ -128,7 +128,7 @@ function writerEnd(writer:fs.WriteStream):Promise<void>
 
 export class Bundler
 {
-    private readonly names = new Set<string>();
+    private readonly names = new Map<string, string>();
 
     private writer:fs.WriteStream|null = null;
     private mapgen:sourceMap.SourceMapGenerator|null = null;
@@ -240,6 +240,17 @@ export class Bundler
         return sourceFile;
     }
 
+    setModuleVarName(apath:string, varname:string):void
+    {
+        const oldpath = this.names.get(varname);
+        if (oldpath !== undefined)
+        {
+            this.main.reportMessage(20002, `module name '${varname}' is dupplicated. (${apath}, ${oldpath})`);
+            return;
+        }
+        this.names.set(varname, apath);
+    }
+
     private async _startWriting(firstLineComment:string|null):Promise<void>
     {
         await this._lock();
@@ -263,7 +274,7 @@ export class Bundler
         this._unlock();
     }
 
-    allocModuleVarName(name:string):string
+    allocModuleVarName(apath:string, name:string):string
     {
         name = identifierValidating(name);
         if (this.names.has(name))
@@ -277,7 +288,7 @@ export class Bundler
             num++;
           }
         }
-        this.names.add(name);
+        this.names.set(name, apath);
         return name;
     }
     
@@ -392,7 +403,6 @@ if (module.exports) return module.exports;\n`;
         this.mapgen = new sourceMap.SourceMapGenerator({
             file:'./'+path.basename(this.output)
         });
-        this.modules.clear();
         this.entryModule = this.add(null, this.entry).module;
 
         await this.taskQueue.onceEnd();
@@ -421,7 +431,7 @@ if (module.exports) return module.exports;\n`;
         this.writer = null;
         this.mapgen = null;
         this.entryModule = null;
-        this.lineOffset = 0;
+        this.modules.clear();
         this.sourceFileCache.clear();
 
         // const sourceMapContent = await fsp.readFile(this.output+'.map', 'utf-8');
@@ -821,9 +831,9 @@ export class BundlerMainContext
             this.cache = JSON.parse(fs.readFileSync(cacheMapPath, 'utf-8'));
             let count = 0;
             const using = new Set<number>();
-            for (const outpath in this.cache)
+            for (const entrypath in this.cache)
             {
-                const cache = this.cache[outpath];
+                const cache = this.cache[entrypath];
                 for (const apath in cache)
                 {
                     count++;
@@ -857,10 +867,10 @@ export class BundlerMainContext
         this.cacheJsonModified = false;
 
         const output:Record<string, Record<string,BundlerModuleId>> = {};
-        for (const outpath in this.cache)
+        for (const entrypath in this.cache)
         {
-            const cache = this.cache[outpath];
-            const outcache:Record<string,{varName:string, number:number}> = output[outpath] = {};
+            const cache = this.cache[entrypath];
+            const outcache:Record<string,{varName:string, number:number}> = output[entrypath] = {};
             for (const apath in cache)
             {
                 const id = cache[apath];
@@ -948,11 +958,15 @@ export class BundlerMainContext
             let varName = path.basename(apath);
             const dotidx = varName.lastIndexOf('.');
             if (dotidx !== -1) varName = varName.substr(0, dotidx);
+            if (varName === 'index')
+            {
+                varName = path.basename(path.dirname(apath));
+            }
             
             id = {
                 number: number,
                 apath,
-                varName: bundler.allocModuleVarName(varName)
+                varName: bundler.allocModuleVarName(apath, varName)
             };
             map[apath] = id;
             this.cacheJsonModified = true;
@@ -1017,6 +1031,11 @@ export class BundlerMainContext
             {
                 const bundler = new Bundler(this, basedir, entryfile, resolvedOutput, options, tsconfig, compilerOptions);
                 bundlers.push(bundler);
+                const cache = this.cache[bundler.entry];
+                for (const apath in cache)
+                {
+                    bundler.setModuleVarName(apath, cache[apath].varName);
+                }
             }
             catch (err)
             {
