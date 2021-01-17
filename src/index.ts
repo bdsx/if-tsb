@@ -10,7 +10,7 @@ import { findCacheDir } from './findcachedir';
 const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
-const CACHE_SIGNATURE = '\ntsb-kr-cache-0.5';
+const CACHE_SIGNATURE = '\ntsb-kr-cache-0.6';
 
 function getCacheFilePath(id:BundlerModuleId):string
 {
