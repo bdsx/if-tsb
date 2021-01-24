@@ -432,6 +432,7 @@ if (module.exports) return module.exports;\n`;
         this.writer = null;
         this.mapgen = null;
         this.entryModule = null;
+        this.lineOffset = 0;
         this.sourceFileCache.clear();
 
         // const sourceMapContent = await fsp.readFile(this.output+'.map', 'utf-8');
