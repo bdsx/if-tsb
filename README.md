@@ -9,6 +9,7 @@ if-tsb ./index.ts # build with specific entry
 if-tsb ./tsconfig.json # build with specific tsconfig.json
 if-tsb -o ./output.js # build with specific output
 if-tsb -w # build with watch
+if-tab --clear-cache # clear cache
 ```
 
 
@@ -54,7 +55,7 @@ if-tsb -w # build with watch
     }
 }
 ```
-* default all options
+* all default options
 ```js
 {
     "entry": "./index.ts",
@@ -66,7 +67,9 @@ if-tsb -w # build with watch
         "cleanConsole": false, // clean console before repeated by watch
         "faster": false, // skip external parsing and reporting, cannot emit some d.ts and will not replace enum const
         "watchWaiting": 30, // bundling after ${watchWaiting}ms from file modifying
-        "verbose": false
+        "verbose": false,
+        "bundleExternals":false, // bundle files in node_modules
+        "externals": [] // files that do not bundle
     },
     "compilerOptions": {
         /* ... */

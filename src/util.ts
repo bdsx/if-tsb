@@ -7,11 +7,13 @@ import path = require('path');
 const cpuCount = os.cpus().length;
 const concurrencyCount = Math.min(Math.max(cpuCount*2, 8), cpuCount);
 
+export const resolved = Promise.resolve();
+
 export const defaultFormatHost: ts.FormatDiagnosticsHost = {
     getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
     getCanonicalFileName: fileName => fileName,
     getNewLine: () => ts.sys.newLine
-  };
+};
 
 export function printNode(node:ts.Node, name:string, tab:string):void
 {
@@ -382,7 +384,7 @@ export class FilesWatcher<T>
         }
     }
 
-    addWatch(target:T, file:string):void
+    add(target:T, file:string):void
     {
         let item = this.watching.get(file);
         if (item)
@@ -402,7 +404,26 @@ export class FilesWatcher<T>
         this.watching.set(file, item);
     }
 
-    watch(target:T, files:string[]):void
+    private _remove(target:T, item:WatchItem<T>):void
+    {
+        if (!item.targets.delete(target)) return;
+        if (item.targets.size === 0)
+        {
+            this.watching.delete(item.path);
+            this.modified.delete(item);
+            item.close();
+        }
+    }
+
+    clear(target:T):void
+    {
+        for (const item of this.watching.values())
+        {
+            this._remove(target, item);
+        }
+    }
+
+    reset(target:T, files:string[]):void
     {
         const set = new Set<string>();
         for (const file of this.watching.keys())
@@ -413,21 +434,13 @@ export class FilesWatcher<T>
         for (const file of files)
         {
             set.delete(file);
-            this.addWatch(target, file);
+            this.add(target, file);
         }
 
         for (const file of set)
         {
             const item = this.watching.get(file)!;
-            if (item.targets.delete(target))
-            {
-                if (item.targets.size === 0)
-                {
-                    this.watching.delete(file);
-                    this.modified.delete(item);
-                    item.close();
-                }
-            }
+            this._remove(target, item);
         }
     }
 
@@ -473,8 +486,53 @@ function processMkdirError(dirname:string, err:any):boolean
     return false;
 }
 
+export namespace namelock
+{
+    const locks = new Map<string|number, (()=>void)[]>();
+    export function lock(name:string|number):Promise<void>
+    {
+        const locked = locks.get(name);
+        if (locked)
+        {
+            return new Promise(resolve=>{
+                locked.push(resolve);
+            });
+        }
+        locks.set(name, []);
+        return resolved;
+    }
+    export function unlock(name:string|number):void
+    {
+        const locked = locks.get(name)!;
+        if (locked.length === 0)
+        {
+            locks.delete(name);
+            return;
+        }
+        locked.shift()!();
+    }
+    export async function waitAll():Promise<void>
+    {
+        const proms:Promise<void>[] = [];
+        for (const arr of locks.values())
+        {
+            proms.push(new Promise(resolve=>{
+                arr.push(resolve);
+            }));
+        }
+        await Promise.all(proms);
+    }
+}
+
 export namespace fsp
 {
+    export function unlink(path:string):Promise<void>
+    {
+        return new Promise((resolve, reject)=>fs.unlink(path, (err)=>{
+            if (err) reject(err);
+            else resolve();
+        }))
+    }
     export function mkdir(path:string):Promise<void>
     {
         return new Promise((resolve, reject)=>fs.mkdir(path, (err)=>{
@@ -502,6 +560,13 @@ export namespace fsp
             if (err) reject(err);
             else resolve(data);
         }))
+    }
+    export function readdir(path:string):Promise<string[]>
+    {
+        return new Promise((resolve, reject)=>fs.readdir(path, (err, out)=>{
+            if (err) reject(err);
+            else resolve(out);
+        }));
     }
         
     export async function mkdirRecursive(dirpath:string):Promise<void> {
@@ -539,6 +604,27 @@ export namespace fsp
                 }
             }
         }
+    }
+    export async function deleteAll(filepath:string):Promise<number>
+    {
+        let count = 0;
+        try
+        {
+            const stat = await fsp.stat(filepath);
+            if (stat.isDirectory())
+            {
+                for (const file of await readdir(filepath))
+                {
+                    count += await deleteAll(path.join(filepath, file));
+                }
+            }
+            await fsp.unlink(filepath);
+            count++;
+        }
+        catch (err)
+        {
+        }
+        return count;
     }
 }
 

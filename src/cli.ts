@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { bundle, bundleWatch } from "./index";
+import { bundle, bundleWatch, clearBundlerCache } from "./index";
 
 (async()=>{
 
@@ -9,6 +9,7 @@ import { bundle, bundleWatch } from "./index";
     const argc = process.argv.length;
     let watch = false;
     let error = false;
+    let clearCache = false;
     let output:string|undefined = undefined;
     
     for (let i=2;i<argc;)
@@ -29,6 +30,9 @@ import { bundle, bundleWatch } from "./index";
             case 'w':
                 watch = true;
                 break;
+            case '-clear-cache':
+                clearCache = true;
+                break;
             default:
                 console.error(`if-tsb: unknown options: ${v}`);
                 error = true;
@@ -42,7 +46,15 @@ import { bundle, bundleWatch } from "./index";
     }
     
     if (error) return;
-    if (path.length === 0) path.push('.');
+    if (clearCache)
+    {
+        await clearBundlerCache();
+    }
+    if (path.length === 0)
+    {
+        if (clearCache) return;
+        path.push('.');
+    }
 
     if (watch)
     {
