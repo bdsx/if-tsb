@@ -1,17 +1,30 @@
 
+if (!Date.now) Date.now = ()=>+new Date();
+
 import ts = require('typescript');
 import fs = require('fs');
 import path = require('path');
 import sourceMap = require('source-map');
+import { identifierValidating } from './checkvar';
+import { ErrorPosition } from './errpos';
 import { findCacheDir } from './findcachedir';
-import { changeExt, ConcurrencyQueue, defaultFormatHost, FilesWatcher, fsp, getScriptKind, identifierValidating, mkdirRecursiveSync, namelock, resolved, SkipableTaskQueue, splitContent, time } from './util';
+import { fsp, mkdirRecursiveSync } from './fsp';
+import { MemoryManager } from './memmgr';
+import { namelock } from './namelock';
+import { changeExt, ConcurrencyQueue, count, defaultFormatHost, getScriptKind, joinModulePath, parsePostfix, resolved, SkipableTaskQueue, splitContent, time } from './util';
+import { FilesWatcher } from './watch';
 import colors = require('colors');
 import globToRegExp = require('glob-to-regexp');
+import { WriterStream as FileWriter } from './streamwriter';
+import { LineStripper } from './linestripper';
 
 const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
 const CACHE_SIGNATURE = '\nTSBC-0.7';
+const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
+const memoryCache = new MemoryManager<RefinedModule>(CACHE_MEMORY_DEFAULT);
+const defaultCompilerOptions = ts.getDefaultCompilerOptions();
 
 function getCacheFilePath(id:BundlerModuleId):string
 {
@@ -29,11 +42,18 @@ export interface BundlerOptions
     globalModuleVarName?:string;
     bundleExternals?:boolean;
     externals?:string[];
+    cacheMemory?:number|string;
+    module?:string;
+}
+
+export interface BundlerOptionsWithOutput extends BundlerOptions
+{
+    output?:string;
 }
 
 export interface TsConfig
 {
-    entry:string[]|Record<string, string>|string;
+    entry:string[]|Record<string, (string|BundlerOptionsWithOutput)>|string;
     output?:string;
 
     bundlerOptions?:BundlerOptions;
@@ -45,20 +65,34 @@ export interface TsConfig
     compilerOptions?:ts.CompilerOptions;
 }
 
-export class BundlerRefined
+export class RefinedModule
 {
-    firstLineComment:string|null;
-    sourceMapOutputLineOffset:number;
+    firstLineComment:string|null = null;
+    sourceMapOutputLineOffset:number = 0;
     outputLineCount:number;
-    dependency:string[];
-    sourceMapText:string|null;
-    content:string;
+    importPathes:string[];
+    importModulePathes:string[];
+    importLines: (ErrorPosition|null)[];
+    sourceMapText:string|null = null;
+    content:string = '';
+    size:number;
 
-    constructor(public readonly id:BundlerModuleId)
+    constructor(public readonly id:BundlerModuleId, public readonly mtime:number)
     {
     }
 
     private readonly saving = new SkipableTaskQueue;
+
+    clear():void
+    {
+        this.firstLineComment = null;
+        this.importModulePathes.length = 0;
+        this.importPathes.length = 0;
+        this.importLines.length = 0;
+        this.sourceMapText = null;
+        this.content = '';
+        this.size = 0;
+    }
 
     save(bundler:Bundler):void
     {
@@ -67,18 +101,17 @@ export class BundlerRefined
             try
             {
                 namelock.lock(this.id.number);
-                const writer = fs.createWriteStream(getCacheFilePath(this.id), {encoding: 'utf-8'});
-                writer.on('error', (err:Error)=>{
-                    bundler.taskQueue.error(err);
-                });
-                await write(writer, this.dependency.join(path.delimiter)+'\n');
-                await write(writer, this.firstLineComment ? this.firstLineComment+'\n' : '\n');
-                await write(writer, this.sourceMapOutputLineOffset+'\n');
-                await write(writer, this.outputLineCount+'\n');
-                await write(writer, this.sourceMapText ? this.sourceMapText.replace(/[\r\n]/g, '')+'\n' : '\n');
-                await write(writer, this.content);
-                await write(writer, CACHE_SIGNATURE);
-                await writerEnd(writer);
+                const writer = new FileWriter(getCacheFilePath(this.id));
+                await writer.write(this.importPathes.join(path.delimiter)+'\n');
+                await writer.write(this.importModulePathes.join(path.delimiter)+'\n');
+                await writer.write(ErrorPosition.stringify(this.importLines)+'\n');
+                await writer.write(this.firstLineComment ? this.firstLineComment+'\n' : '\n');
+                await writer.write(this.sourceMapOutputLineOffset+'\n');
+                await writer.write(this.outputLineCount+'\n');
+                await writer.write(this.sourceMapText ? this.sourceMapText.replace(/[\r\n]/g, '')+'\n' : '\n');
+                await writer.write(this.content);
+                await writer.write(CACHE_SIGNATURE);
+                await writer.end();
                 bundler.taskQueue.unref();
             }
             finally
@@ -102,37 +135,59 @@ export class BundlerRefined
             namelock.unlock(this.id.number);
         }
         if (!content.endsWith(CACHE_SIGNATURE)) throw Error('Outdated cache or failed data');
-        const splited = splitContent(content, 6, '\n');
-        const deps = splited[0];
-        this.dependency = deps === '' ? [] : deps.split(path.delimiter);
-        this.firstLineComment = splited[1] || null;
-        this.sourceMapOutputLineOffset = +splited[2];
-        this.outputLineCount = +splited[3];
-        this.sourceMapText = splited[4] || null;
-        const source = splited[5];
+        const [
+            importPathes, 
+            importModulePathes, 
+            importLines,
+            firstLineComment, 
+            sourceMapOutputLineOffset,
+            outputLineCount,
+            sourceMapText,
+            source
+        ] = splitContent(content, 6, '\n');
+        this.importPathes = importPathes === '' ? [] : importPathes.split(path.delimiter);
+        this.importModulePathes = importModulePathes === '' ? [] : importModulePathes.split(path.delimiter);
+        this.importLines = ErrorPosition.parse(importLines);
+        this.firstLineComment = firstLineComment || null;
+        this.sourceMapOutputLineOffset = +sourceMapOutputLineOffset;
+        this.outputLineCount = +outputLineCount;
+        this.sourceMapText = sourceMapText || null;
         this.content = source.substr(0, source.length - CACHE_SIGNATURE.length);
+        this.size = this.content.length + 2048;
     }
     
-    static async loadCacheIfNotModified(id:BundlerModuleId, tsconfigMtime:number):Promise<BundlerRefined|null>
+    static async loadCacheIfNotModified(id:BundlerModuleId, tsconfigMtime:number):Promise<RefinedModule|null>
     {
         try
         {
-            try
+            const cached = memoryCache.get(id.number);
+            if (cached !== undefined)
             {
-                namelock.lock(id.number);
-                const cachepath = getCacheFilePath(id);
-                const [cache, file] = await Promise.all([fsp.stat(cachepath), fsp.stat(id.apath)]);
-                const cahcemtime = +cache.mtime;
-                if (cahcemtime < tsconfigMtime) return null;
-                if (cahcemtime < +file.mtime) return null;
+                const file = await fsp.stat(id.apath);
+                if (cached.mtime < tsconfigMtime) return null;
+                if (cached.mtime < +file.mtime) return null;
+                return cached;
             }
-            finally
+            else
             {
-                namelock.unlock(id.number);
+                let cachemtime = 0;
+                try
+                {
+                    namelock.lock(id.number);
+                    const cachepath = getCacheFilePath(id);
+                    const [cache, file] = await Promise.all([fsp.stat(cachepath), fsp.stat(id.apath)]);
+                    cachemtime = +cache.mtime;
+                    if (cachemtime < tsconfigMtime) return null;
+                    if (cachemtime < +file.mtime) return null;
+                }
+                finally
+                {
+                    namelock.unlock(id.number);
+                }
+                const refined = new RefinedModule(id, cachemtime);
+                await refined.load();
+                return refined;
             }
-            const refined = new BundlerRefined(id);
-            await refined.load();
-            return refined;
         }
         catch (err)
         {
@@ -142,24 +197,23 @@ export class BundlerRefined
     
 }
 
-function write(writer:fs.WriteStream, data:string):Promise<void>
+enum ExportRule
 {
-    if (writer.write(data)) return resolved;
-    return new Promise(resolve=>writer.once('drain', resolve));
-}
-function writerEnd(writer:fs.WriteStream):Promise<void>
-{
-    return new Promise(resolve=>writer.end(resolve));
+    None,
+    CommonJS,
+    ES2015,
+    Var,
 }
 
 export class Bundler
 {
     private readonly names = new Map<string, BundlerModuleId>();
 
-    private writer:fs.WriteStream|null = null;
+    private writingProm:Promise<FileWriter>|null = null;
     private mapgen:sourceMap.SourceMapGenerator|null = null;
     private entryModule:BundlerModule|null = null;
     private lineOffset = 0;
+    public entryModuleIsAccessed = false;
 
     public readonly output:string;
     public readonly outdir:string;
@@ -172,11 +226,21 @@ export class Bundler
     public readonly faster:boolean;
     public readonly bundleExternals:boolean;
     public readonly externals:RegExp[];
+    public readonly cacheMemory:number|undefined;
+    public readonly exportRule:ExportRule;
+    public readonly exportVarKeyword:string|null = null;
+    public readonly exportVarName:string|null = null;
 
     public readonly modules = new Map<string, BundlerModule>();
     public readonly taskQueue = new ConcurrencyQueue;
     private readonly sourceFileCache = new Map<string, ts.SourceFile>();
     public readonly tsconfigMtime:number;
+    public readonly moduleResolutionCache:ts.ModuleResolutionCache;
+    public readonly sys:ts.System;
+    public readonly compilerHost:ts.CompilerHost;
+    public readonly entryApath:string;
+    public readonly entryRpath:string;
+    public readonly constKeyword:string;
 
     private csResolve:(()=>void)[] = [];
     private csEntered = false;
@@ -184,12 +248,59 @@ export class Bundler
     constructor(
         public readonly main:BundlerMainContext,
         public readonly basedir:string, 
-        public readonly entry:string, 
+        entry:string, 
         resolvedOutput:string,
         options:TsConfig, 
         public readonly tsconfig:string|null,
         public readonly tsoptions:ts.CompilerOptions)
     {
+        this.entryApath = path.join(this.basedir, entry);
+        this.entryRpath = path.relative(this.basedir, this.entryApath);
+
+        if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
+        {
+            this.constKeyword = 'const';
+        }
+        else
+        {
+            this.constKeyword = 'var';
+        }
+        delete this.tsoptions.outFile;
+        delete this.tsoptions.outDir;
+        delete this.tsoptions.out;
+        this.tsoptions.allowJs = true;
+        this.tsoptions.outDir = '/.if-tsb';
+
+        const that = this;
+        this.sys = {
+            getCurrentDirectory():string
+            {
+                return that.basedir;
+            },
+            directoryExists(filepath:string):boolean
+            {
+                try
+                {
+                    const stat = fs.statSync(that.resolvePath(filepath));
+                    return stat.isDirectory();
+                }
+                catch (err)
+                {
+                    return false;
+                }
+            },
+            fileExists(filepath:string):boolean
+            {
+                return fs.existsSync(that.resolvePath(filepath));
+            },
+        } as any;
+        Object.setPrototypeOf(this.sys, ts.sys);
+
+        this.compilerHost = ts.createCompilerHost(this.tsoptions);
+        this.compilerHost.getCurrentDirectory = function() { return that.sys.getCurrentDirectory(); },
+        this.compilerHost.readFile = function(fileName:string) { return that.sys.readFile(fileName); },
+        this.compilerHost.directoryExists = function(dirName:string) { return that.sys.directoryExists(dirName); },
+        this.compilerHost.getDirectories = function(dirName:string) { return that.sys.getDirectories(dirName); }
 
         if (tsconfig !== null)
         {
@@ -198,10 +309,6 @@ export class Bundler
         else
         {
             this.tsconfigMtime = 0;
-        }
-        if (!this.tsoptions.target)
-        {
-            this.tsoptions.target = ts.getDefaultCompilerOptions().target!;
         }
         this.output = resolvedOutput;
         this.outdir = path.dirname(this.output);
@@ -216,16 +323,64 @@ export class Bundler
         this.watchWaiting = boptions.watchWaiting;
         this.bundleExternals = boptions.bundleExternals || false;
         this.externals = boptions.externals ? boptions.externals.map(glob=>globToRegExp(glob)) : [];
+        this.cacheMemory = parsePostfix(boptions.cacheMemory);
+        if (boptions.module === undefined)
+        {
+            this.exportRule = ExportRule.None;
+        }
+        else
+        {
+            switch (boptions.module.toLowerCase())
+            {
+            case 'none': this.exportRule = ExportRule.None; break;
+            case 'commonjs': this.exportRule = ExportRule.CommonJS; break;
+            case 'es2015': this.exportRule = ExportRule.ES2015; break;
+            case 'es2020': this.exportRule = ExportRule.ES2015; break;
+            case 'esnext': this.exportRule = ExportRule.ES2015; break;
+            default:
+                const [rule, param] = splitContent(boptions.module, 2, ' ');
+                switch (rule)
+                {
+                case 'var': 
+                    this.exportRule = ExportRule.Var;
+                    this.exportVarKeyword = 'var';
+                    this.exportVarName = identifierValidating(param);
+                    break;
+                case 'let': 
+                    this.exportRule = ExportRule.Var;
+                    this.exportVarKeyword = 'let';
+                    this.exportVarName = identifierValidating(param);
+                    break;
+                case 'const': 
+                    this.exportRule = ExportRule.Var;
+                    this.exportVarKeyword = 'const';
+                    this.exportVarName = identifierValidating(param);
+                    break;
+                default:
+                    this.exportRule = ExportRule.CommonJS;
+                    console.error(colors.red(`if-tsb: Unsupported module type: ${boptions.module}`));
+                    break;
+                }
+                break;
+            }
+        }
+        
+        this.moduleResolutionCache = ts.createModuleResolutionCache(this.basedir, ts.sys.useCaseSensitiveFileNames ? v=>v.toLocaleLowerCase() : v=>v);
     }
 
-    private _lock():Promise<void>
+    private async _lock():Promise<FileWriter>
+    {
+        const writer = await this.writingProm!;
+        await this._lockWithoutWriter();
+        return writer;
+    }
+    private _lockWithoutWriter():Promise<void>
     {
         if (!this.csEntered)
         {
             this.csEntered = true;
             return resolved;
         }
-
         return new Promise<void>(resolve=>{
             this.csResolve.push(resolve);
         });
@@ -250,11 +405,6 @@ export class Bundler
     resolvePath(filepath:string):string
     {
         return path.isAbsolute(filepath) ? path.join(filepath) : path.join(this.basedir, filepath);
-    }
-
-    isEntryModule(module:BundlerModule):boolean
-    {
-        return this.entryModule === module;
     }
 
     async getSourceFile(filepath:string):Promise<ts.SourceFile>
@@ -291,29 +441,32 @@ export class Bundler
         return null;
     }
 
-    private async _startWriting(firstLineComment:string|null):Promise<void>
+    private async _startWriting(firstLineComment:string|null):Promise<FileWriter>
     {
         await fsp.mkdirRecursive(this.outdir);
 
-        await this._lock();
-       
-        if (this.writer === null)
+        await this._lockWithoutWriter();
+        try
         {
-            this.writer = fs.createWriteStream(this.output, {encoding: 'utf-8'});
+            const writer = new FileWriter(this.output);
             if (firstLineComment !== null)
             {
-                await write(this.writer, firstLineComment+'\n');
+                await writer.write(firstLineComment+'\n');
                 this.lineOffset++;
             }
             if (this.tsoptions.alwaysStrict)
             {
-                await write(this.writer, '"use strict";\n');
+                await writer.write('"use strict";\n');
                 this.lineOffset++;
             }
-            await write(this.writer, `const ${this.globalVarName} = {\n`);
+            await writer.write(`${this.constKeyword} ${this.globalVarName} = {\n`);
             this.lineOffset++;
+            return writer;
         }
-        this._unlock();
+        finally
+        {
+            this._unlock();
+        }
     }
 
     allocModuleVarName(id:BundlerModuleId, name:string):string
@@ -339,18 +492,20 @@ export class Bundler
         return this.names.delete(name);
     }
     
-    async write(refined:BundlerRefined):Promise<void>
+    async write(refined:RefinedModule):Promise<void>
     {
-        if (this.writer === null)
-        {
-            await this._startWriting(refined.firstLineComment);
-        }
         if (this.verbose) console.log(refined.id.apath+': writing');
-        await this._lock();
-        await write(this.writer!, refined.content);
+        const writer = await this._lock();
+        try
+        {
+            await writer.write(refined.content);
+        }
+        finally
+        {
+            this._unlock();
+        }
         const offset = this.lineOffset + refined.sourceMapOutputLineOffset;
         this.lineOffset += refined.outputLineCount;
-        this._unlock();
 
         if (refined.sourceMapText)
         {
@@ -380,110 +535,111 @@ export class Bundler
             }
         }
     }
-
-    refine(module:BundlerModule, dependency:string[], content:string, selfExports:boolean, sourceMapText:string|null, doNotSave:boolean):BundlerRefined
-    {
-        let contentBegin = 0;
-        let contentEnd = content.length;
-        let stripedLine = 0;
-
-        function stripFirstLine(check:string):string|null
-        {
-          let idx = content.indexOf('\n', contentBegin);
-          if (idx == -1) return content;
-    
-          let cr = 0;
-          if (content.charAt(idx-1) === '\r') cr = 1;
-          const actual = content.substring(contentBegin, idx-cr);
-          if (actual.startsWith(check))
-          {
-            stripedLine++;
-            contentBegin = idx+1;
-            return actual;
-          }
-          return null;
-        }
-
-        const firstLineComment = stripFirstLine('#');
-        const stricted = stripFirstLine('"use strict";');
-        stripFirstLine('Object.defineProperty(exports, "__esModule", { value: true });');
-    
-        let lastLineIdx = content.lastIndexOf('\n')+1;
-        
-        const lastLine = content.substr(lastLineIdx);
-        if (lastLine.startsWith('//# sourceMappingURL='))
-        {
-            lastLineIdx -= 2;
-            if (content.charAt(lastLineIdx) !== '\r') lastLineIdx++;
-            contentEnd = lastLineIdx;
-        }
-
-        const useStrict = !this.tsoptions.alwaysStrict && stricted;
-        
-        let sourceMapOutputLineOffset = 5;
-        if (useStrict) sourceMapOutputLineOffset ++;
-        if (!selfExports) sourceMapOutputLineOffset += 2;
-        sourceMapOutputLineOffset -= stripedLine;
-
-        const refined = new BundlerRefined(module.id);
-        refined.dependency = dependency;
-        refined.firstLineComment = firstLineComment;
-        refined.sourceMapOutputLineOffset = sourceMapOutputLineOffset;
-        refined.content = `////////////////////////////////////////////////////////////////
-// ${module.rpath}\n${refined.id.varName}(){\n`;
-        if (useStrict) refined.content += '"use strict";\n';
-        refined.content += `var module = ${this.globalVarName}.${refined.id.varName};
-if (module.exports) return module.exports;\n`;
-        if (!selfExports) refined.content += `var exports = {};\nmodule.exports = exports;\n`;
-        refined.content += content.substring(contentBegin, contentEnd);
-        refined.content += '\nreturn module.exports;\n},\n';
-        refined.sourceMapText = sourceMapText;
-        refined.outputLineCount = refined.content.split('\n').length-1;
-        if (!doNotSave) refined.save(this);
-        return refined;
-    }
         
     async bundle():Promise<boolean>
     {
-        if (this.writer !== null) throw Error('bundler is busy');
-        if (this.verbose) console.log(this.entry+': starting');
+        if (this.writingProm !== null) throw Error('bundler is busy');
+        if (this.verbose) console.log(this.entryRpath+': starting');
         this.mapgen = new sourceMap.SourceMapGenerator({
             file:'./'+path.basename(this.output)
         });
+        
+        this.entryModule = null;
         this.modules.clear(); // must not clear at end, it's accessed by the watcher
-        this.entryModule = this.add(null, this.entry).module;
+        
+        const filename = path.basename(this.entryApath);
+        const mpath = filename.substr(0, filename.length - getScriptKind(filename).ext.length);
 
-        await this.taskQueue.onceEnd();
-        if (this.writer === null)
-        {
-            if (this.verbose) console.log(this.entry+': no writer');
-            console.error('no writer');
-            return false;
-        }
-        if (this.verbose) console.log(this.entry+': writing end');
-        await write(this.writer!, `\n};\nmodule.exports=${this.globalVarName}.${this.entryModule.id.varName}();\n//# sourceMappingURL=${path.basename(this.output)}.map`);
-        await new Promise<void>(resolve=>{
-            let counter = 2;
-            function done()
-            {
-                counter --;
-                if (counter === 0)
-                {
-                    resolve();
-                }
-            }
-            this.writer!.end(done);
-            fs.writeFile(this.output+'.map', this.mapgen!.toString(), done);
+
+        let resolveWriter:(writer:FileWriter)=>void;
+        let rejectWriter:(err:Error)=>void;
+        this.writingProm = new Promise((resolve, reject)=>{
+            resolveWriter = resolve;
+            rejectWriter = reject;
         });
+
+        let writer:FileWriter|null = null;
+
+        this.entryModule = this.getModule(null, true, './'+mpath, this.entryApath);
+        this.entryModule.isAppended = true;
+        let refined:RefinedModule|null = null;
+        this.taskQueue.run(async()=>{
+            try
+            {
+                refined = await this.entryModule!.append();
+                if (refined === null) return;
+                writer = await this._startWriting(refined.firstLineComment);
+                resolveWriter(writer);
+            }
+            catch (err)
+            {
+                rejectWriter(err);
+            }
+        });
+        await this.taskQueue.onceEnd();
+        if (this.verbose) console.log(this.entryRpath+': writing end');
+
+        this.lineOffset += 2;
+        if (this.entryModuleIsAccessed || this.tsoptions.target! < ts.ScriptTarget.ES5)
+        {
+            await writer!.write(`entry:exports\n};\n`);
+        }
+        else
+        {
+            await writer!.write(`};\n`);
+        }
+        await this.write(refined!);
+        memoryCache.release(refined!.id.number, refined!);
+
+        if (this.entryModuleIsAccessed)
+        {
+            await writer!.write(`${this.globalVarName}.entry=module.exports;\n`);
+        }
+
+        await Promise.all([(async()=>{
+            switch (this.exportRule)
+            {
+            case ExportRule.Var:
+                await writer!.write(`${this.exportVarKeyword} ${this.exportVarName}=module.exports;\n`);
+                break;
+            }
+            await writer!.write(`\n//# sourceMappingURL=${path.basename(this.output)}.map`);
+            await writer!.end();
+        })(), fsp.writeFile(this.output+'.map', this.mapgen!.toString())]);
 
         this.main.clearCache(this, this.modules);
 
-        if (this.verbose) console.log(this.entry+': done');
-        this.writer = null;
+        if (this.verbose) console.log(this.entryRpath+': done');
         this.mapgen = null;
-        this.entryModule = null;
         this.lineOffset = 0;
+        this.writingProm = null;
         this.sourceFileCache.clear();
+        
+        function checkModuleDep(parent:BundlerModule):boolean
+        {
+            if (parent.checkState === CheckState.Checked) return false;
+            if (parent.checkState === CheckState.Entered) return true;
+
+            const n = parent.children.length;
+            for (let i=0;i<n;i++)
+            {
+                const child = parent.children[i];
+                if (checkModuleDep(child))
+                {
+                    const parents = child.getParents();
+                    parents.reverse();
+                    parents.push(child);
+                    child.error(child.importLines![i], 1005, 'Circular dependency '+parents.map(m=>colors.yellow(m.rpath)).join(' → '));
+                }
+            }
+            parent.checkState = CheckState.Checked;
+            return false;
+        }   
+
+        if (this.checkCircularDependency)
+        {
+            checkModuleDep(this.entryModule!);
+        }
 
         // const sourceMapContent = await fsp.readFile(this.output+'.map', 'utf-8');
         // const content = await fsp.readFile(this.output, 'utf-8');
@@ -499,53 +655,60 @@ if (module.exports) return module.exports;\n`;
         return true;
     }
 
-    add(parent:BundlerModule|null, filepath:string):{module:BundlerModule, circularDependency: boolean}
+    getModule(parent:BundlerModule|null, isEntry:boolean, mpath:string, apath:string):BundlerModule
     {
-        const apath = path.resolve(this.basedir, filepath);
         let module = this.modules.get(apath);
-        if (module)
-        {
-            if (this.checkCircularDependency)
-            {
-                while (parent !== null)
-                {
-                    if (parent === module)
-                    {
-                        return {module, circularDependency: true};
-                    }
-                    parent = parent.parent;
-                }
-            }
-            return {module, circularDependency: false,};
-        }
-        module = new BundlerModule(this, parent, apath);
+        if (module) return module;
+        
+        module = new BundlerModule(this, parent, isEntry, mpath, apath);
         this.modules.set(apath, module);
-        this.taskQueue.run(()=>module!.load());
-        return {module, circularDependency: false};
+        return module;
     }
+}
+
+enum CheckState
+{
+    None,Entered,Checked,
 }
 
 export class BundlerModule
 {
     public readonly id:BundlerModuleId;
     public readonly rpath:string;
+    public readonly children:BundlerModule[] = [];
+    public importLines:(ErrorPosition|null)[]|null = null;
+    public isAppended = false;
+    public checkState = CheckState.None;
 
     constructor(
         public readonly bundler:Bundler, 
-        public readonly parent:BundlerModule|null, 
+        public readonly parent:BundlerModule|null,
+        public readonly isEntry:boolean,
+        public readonly mpath:string,
         apath:string)
     {
-        this.id = bundler.main.getModuleId(bundler, apath);
+        this.id = bundler.main.getModuleId(bundler, apath, isEntry);
         this.rpath = path.relative(bundler.basedir, apath);
     }
 
-    error(node:ts.Node, code:number, message:string):void
+    error(pos:ErrorPosition|null, code:number, message:string):void
+    {
+        if (pos === null)
+        {
+            this.bundler.main.reportMessage(code, message);
+        }
+        else
+        {
+            this.bundler.main.report(this.rpath, pos.line, pos.column, code, message, pos.lineText, pos.width);
+        }
+    }
+
+    makeErrorPosition(node:ts.Node):ErrorPosition|null
     {
         const source = node.getSourceFile();
         if (source === undefined)
         {
-            this.bundler.main.reportMessage(code, message);
-            return;
+            return null;
         }
         const pos = source.getLineAndCharacterOfPosition(node.getStart());
         const width = node.getWidth();
@@ -553,12 +716,21 @@ export class BundlerModule
         const sourceText = source.getFullText();
         const lines = source.getLineStarts();
         const start = lines[pos.line];
-
         const linenum = pos.line+1;
         const end = linenum < lines.length ? lines[linenum]-1 : sourceText.length;
 
         const lineText = sourceText.substring(start, end);
-        this.bundler.main.report(this.rpath, linenum, pos.character, code, message, lineText, width);
+        return {
+            line: linenum,
+            column: pos.character,
+            lineText: lineText,
+            width: width
+        };
+    }
+
+    errorWithNode(node:ts.Node, code:number, message:string):void
+    {
+        return this.error(this.makeErrorPosition(node), code, message);
     }
 
     getParents():BundlerModule[]
@@ -574,50 +746,39 @@ export class BundlerModule
         return out;
     }
 
-    private async _refine():Promise<BundlerRefined|null>
+    private async _refine():Promise<RefinedModule|null>
     {
+        const refined = new RefinedModule(this.id, Date.now());
+
         let doNotSave = false;
+        let useDirName = false;
+        let useFileName = false;
+        let useModule = false;
         const bundler = this.bundler;
         const basedir = bundler.basedir;
-        const sys:ts.System = {
-            getCurrentDirectory():string
-            {
-                return basedir;
-            },
-            directoryExists(filepath:string):boolean
-            {
-                try
-                {
-                    const stat = fs.statSync(bundler.resolvePath(filepath));
-                    return stat.isDirectory();
-                }
-                catch (err)
-                {
-                    return false;
-                }
-            },
-            fileExists(filepath:string):boolean
-            {
-                return fs.existsSync(bundler.resolvePath(filepath));
-            },
-        } as any;
-        Object.setPrototypeOf(sys, ts.sys);
 
-        const dependency:string[] = [];
+        const importPaths:string[] = [];
+        const importModulePathes:string[] = [];
+        const importLines:(ErrorPosition|null)[] = [];
+        refined.importPathes = importPaths;
+        refined.importModulePathes = importModulePathes;
+        refined.importLines = this.importLines = importLines;
+        refined.content = `// ${this.rpath}\n`;
+
 
         const factory = (ctx:ts.TransformationContext)=>{
             const stacks:ts.Node[] = [];
 
-            const findPositionedNode = ():ts.Node=>{
+            const getErrorPosition = ():ErrorPosition|null=>{
                 for (let i = stacks.length-1; i >= 0; i--)
                 {
                     let node = stacks[i];
                     const ori  =(node as any).original;
                     if (ori) node = ori;
                     if (node.pos === -1) continue;
-                    return node;
+                    return this.makeErrorPosition(node);
                 }
-                return sourceFile;
+                return this.makeErrorPosition(sourceFile);
             };
 
             const importFromStringLiteral = (_node:ts.Node, base:ts.Node):ts.Node=>{
@@ -626,44 +787,49 @@ export class BundlerModule
                     if (!bundler.suppressDynamicImportErrors)
                     {
                         doNotSave = true;
-                        this.error(findPositionedNode(), 20001, `if-tsb does not support dynamic import for local module, (${ts.SyntaxKind[_node.kind]} is not string literal)`);
+                        this.error(getErrorPosition(), 20001, `if-tsb does not support dynamic import for local module, (${ts.SyntaxKind[_node.kind]} is not string literal)`);
                     }
                     return base;
                 }
                 const node = _node as ts.StringLiteral;
-                let module = ts.nodeModuleNameResolver(node.text, this.id.apath, this.bundler.tsoptions, sys);
+                const importName = node.text;                
+                const oldsys = this.bundler.sys;
+                const sys:ts.System = Object.setPrototypeOf({
+                    fileExists(path: string): boolean
+                    {
+                        if (getScriptKind(path).kind === ts.ScriptKind.External) return false;
+                        return oldsys.fileExists(path);
+                    }
+                }, oldsys);
+
+                const mpath = joinModulePath(this.mpath, importName);
+                for (const glob of this.bundler.externals)
+                {
+                    if (glob.test(mpath)) return base;
+                }
+
+                let module = ts.nodeModuleNameResolver(node.text, this.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
                 if (!module.resolvedModule && node.text === '.') 
-                    module = ts.nodeModuleNameResolver(path.join(basedir, 'index'), this.id.apath, this.bundler.tsoptions, sys);
+                    module = ts.nodeModuleNameResolver(path.join(basedir, 'index'), this.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
                 const info = module.resolvedModule;
                 if (!info)
                 {
+                    if (!importName.startsWith('.'))
+                    {
+                        if (!this.bundler.bundleExternals) return base;
+                    }
                     if (builtin.has(node.text)) return base;
                     doNotSave = true;
-                    this.error(findPositionedNode(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
+                    this.error(getErrorPosition(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
                     return base;
-                }    
-                
+                }
+
                 if (info.isExternalLibraryImport)
                 {
                     if (!this.bundler.bundleExternals) return base;
-
-                    for (const glob of this.bundler.externals)
-                    {
-                        if (glob.test(node.text)) return base;
-                    }
-                }
-                else
-                {
-                    let rpath = path.relative(this.bundler.basedir, info.resolvedFileName).replace(/\\/g, '/');
-                    if (!rpath.startsWith('.')) rpath = './'+rpath;
-                    for (const glob of this.bundler.externals)
-                    {
-                        if (glob.test(rpath)) return base;
-                    }
                 }
                 
-    
-                let filepath = info.resolvedFileName;
+                let filepath = path.isAbsolute(info.resolvedFileName) ? path.join(info.resolvedFileName) : path.join(bundler.basedir, info.resolvedFileName);
                 const kind = getScriptKind(filepath);
                 if (kind.kind === ts.ScriptKind.External)
                 {
@@ -671,26 +837,30 @@ export class BundlerModule
                     if (!fs.existsSync(filepath))
                     {
                         doNotSave = true;
-                        this.error(findPositionedNode(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
+                        this.error(getErrorPosition(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
                         return base;
                     }
                 }
     
-                const {module: source, circularDependency} = this.bundler.add(this, filepath);
-                if (circularDependency)
+                const childModule = bundler.getModule(this, false, mpath, filepath);
+                importPaths.push(filepath);
+                importModulePathes.push(mpath);
+                importLines.push(getErrorPosition());
+                this.children.push(childModule);
+
+                if (childModule.isEntry)
                 {
-                    let parents = this.getParents();
-                    parents.reverse();
-                    parents.push(source);
-                    doNotSave = true;
-                    this.error(findPositionedNode(), 1005, 'Circular dependency '+parents.map(m=>colors.yellow(m.rpath)).join(' → '));
+                    bundler.entryModuleIsAccessed = true;
+                    return ctx.factory.createPropertyAccessExpression(
+                        ctx.factory.createIdentifier(this.bundler.globalVarName),
+                        ctx.factory.createIdentifier('entry'));
                 }
-    
-                dependency.push(source.id.apath);
         
                 return ctx.factory.createCallExpression(
-                    ctx.factory.createPropertyAccessExpression(ctx.factory.createIdentifier(this.bundler.globalVarName), ctx.factory.createIdentifier(source.id.varName)), 
-                    [], []);;
+                    ctx.factory.createPropertyAccessExpression(
+                        ctx.factory.createIdentifier(this.bundler.globalVarName), 
+                        ctx.factory.createIdentifier(childModule.id.varName)), 
+                    [], []);
             };
     
             const visit = (_node:ts.Node):ts.Node=>{
@@ -698,6 +868,16 @@ export class BundlerModule
 
                 switch (_node.kind)
                 {
+                case ts.SyntaxKind.Identifier: {
+                    const node = _node as ts.Identifier;
+                    switch (node.text)
+                    {
+                    case '__dirname': useDirName = true; break;
+                    case '__filename': useFileName = true; break;
+                    case 'module': useModule = true; break;
+                    } 
+                    break;
+                }
                 case ts.SyntaxKind.ImportEqualsDeclaration: {
                     const node = _node as ts.ImportEqualsDeclaration;
                     
@@ -714,7 +894,7 @@ export class BundlerModule
                     const node = _node as ts.ImportDeclaration;
                     return importFromStringLiteral(node.moduleSpecifier, _node);
                 }
-                case ts.SyntaxKind.CallExpression:
+                case ts.SyntaxKind.CallExpression: {
                     const node = _node as ts.CallExpression;
                     switch (node.expression.kind)
                     {
@@ -722,7 +902,7 @@ export class BundlerModule
                     if (node.arguments.length !== 1)
                     {
                         doNotSave = true;
-                        this.error(findPositionedNode(), 1005, `Cannot call import with multiple parameters`);
+                        this.error(getErrorPosition(), 1005, `Cannot call import with multiple parameters`);
                         return _node;
                     }
                     return importFromStringLiteral(node.arguments[0], _node);
@@ -735,10 +915,9 @@ export class BundlerModule
                     }
                     break;
                     }
-                    // case ts.SyntaxKind.PropertyAccessExpression:
                     }
                     break;
-                }
+                }}
                 const ret = ts.visitEachChild(_node, visit, ctx);
                 stacks.pop();
                 return ret;
@@ -761,118 +940,210 @@ export class BundlerModule
         }
         
         let sourceMapText:string|null = null;
-        let outputText = '';
+        let stricted = false;
 
-        switch (info.kind)
+        if (info.kind === ts.ScriptKind.JSON)
         {
-        case ts.ScriptKind.JSON:
-            return this.bundler.refine(this, dependency, 'module.exports = '+sourceFile.text+';', true, null, doNotSave);
-        case ts.ScriptKind.JS:
-            const result = ts.transform(sourceFile, [factory], this.bundler.tsoptions);
-            if (result.diagnostics && result.diagnostics.length !== 0)
-            { 
-                doNotSave = true;
-                this.bundler.main.reportFromDiagnostics(result.diagnostics);
-            }
-            const printer = ts.createPrinter({
-                removeComments: false
-            });
-            const content = printer.printFile(result.transformed[0]);
-            return this.bundler.refine(this, dependency, content, false, null, doNotSave);
-        }
-
-        const isEntry = bundler.isEntryModule(this);
-        const compilerHostBase = ts.createCompilerHost(bundler.tsoptions);
-        const compilerHost:ts.CompilerHost = {
-            getSourceFile(fileName:string, languageVersion: ts.ScriptTarget, onError?: (message: string) => void, shouldCreateNewSourceFile?: boolean) {
-                if (bundler.faster)
-                {
-                    if (path.join(fileName) === filepath) return sourceFile;
-                    return undefined;
-                }
-
-                return bundler.getSourceFileSync(fileName, languageVersion);
-            },
-            writeFile(name:string, text:string) {
-                const info = getScriptKind(name);
-                if (info.kind === ts.ScriptKind.JS) {
-                    outputText = text;
-                }
-                else if (info.kind === ts.ScriptKind.External) {
-                    if (isEntry)
-                    {
-                        bundler.taskQueue.ref();
-                        if (bundler.verbose) console.log(`${name}: writing`);
-                        fsp.writeFile(changeExt(bundler.output, 'd.ts'), text).then(()=>{
-                            bundler.taskQueue.unref();
-                        }, err=>bundler.taskQueue.error(err));
-                    }
-                }
-                else if (info.ext === '.MAP') {
-                    sourceMapText = text;
-                }
-            },
-            getCurrentDirectory() { return sys.getCurrentDirectory(); },
-            fileExists(fileName:string) { return bundler.resolvePath(fileName) === filepath; },
-            readFile(fileName:string) { return sys.readFile(fileName); },
-            directoryExists(dirName:string) { return sys.directoryExists(dirName); },
-            getDirectories(dirName:string) { return sys.getDirectories(dirName); }
-        } as any;
-        Object.setPrototypeOf(compilerHost, compilerHostBase);
-
-        const diagnostics:ts.Diagnostic[]|undefined = bundler.faster ? undefined : [];
-        const program = ts.createProgram([filepath], this.bundler.tsoptions, compilerHost, undefined, diagnostics);
-        
-        if (diagnostics !== undefined)
-        {
-            diagnostics.push(...program.getSyntacticDiagnostics(sourceFile));
-            // diagnostics.push(...program.getOptionsDiagnostics());
-        }
-        
-        program.emit(
-            /*targetSourceFile*/ undefined, 
-            /*writeFile*/ undefined, 
-            /*cancellationToken*/ undefined, 
-            /*emitOnlyDtsFiles*/ undefined, 
-            { 
-                after: [factory] 
-            });
-        
-        if (diagnostics !== undefined && diagnostics.length !== 0)
-        {
-            doNotSave = true;
-            this.bundler.main.reportFromDiagnostics(diagnostics);
-        }
-        if (!outputText)
-        {
-            this.bundler.main.reportMessage(6053, `Failed to parse ${filepath}`);
-            return null;
-        }
-        return this.bundler.refine(this, dependency, outputText, false, sourceMapText, doNotSave);
-    }
-
-    async refine():Promise<BundlerRefined|null>
-    {
-        let refined = await BundlerRefined.loadCacheIfNotModified(this.id, this.bundler.tsconfigMtime);
-        if (refined !== null)
-        {
-            for (const dep of refined.dependency)
+            if (this.isEntry)
             {
-                this.bundler.add(this, dep);
+                switch (bundler.exportRule)
+                {
+                case ExportRule.None:
+                    break;
+                // case ExportRule.ES2015:
+                //     break;
+                case ExportRule.Var:
+                    refined.content += `${bundler.exportVarKeyword} ${bundler.exportVarName}=${sourceFile.text};\n`;
+                    break;
+                default:
+                    refined.content += `module.exports=${sourceFile.text};\n`;
+                    break;
+                }
+            }
+            else
+            {
+                if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015)
+                {
+                    refined.content += `${refined.id.varName}(){\n`;
+                }
+                else
+                {
+                    refined.content += `${refined.id.varName}:function(){\n`;
+                }
+                refined.content += `if(${bundler.globalVarName}.${refined.id.varName}.exports) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
+                refined.content += `\nreturn ${bundler.globalVarName}.${refined.id.varName}.exports=${sourceFile.text};\n},\n`;
             }
         }
         else
         {
-            refined = await this._refine();
+            let content = '';
+            const isEntryModule = this.isEntry;
+            const compilerHost:ts.CompilerHost = Object.setPrototypeOf({
+                getSourceFile(fileName:string, languageVersion: ts.ScriptTarget, onError?: (message: string) => void, shouldCreateNewSourceFile?: boolean) {
+                    if (bundler.faster)
+                    {
+                        if (path.join(fileName) === filepath) return sourceFile;
+                        return undefined;
+                    }
+    
+                    return bundler.getSourceFileSync(fileName, languageVersion);
+                },
+                writeFile(name:string, text:string) {
+                    const info = getScriptKind(name);
+                    if (info.kind === ts.ScriptKind.JS) {
+                        content = text;
+                    }
+                    else if (info.kind === ts.ScriptKind.External) {
+                        if (isEntryModule)
+                        {
+                            bundler.taskQueue.ref();
+                            if (bundler.verbose) console.log(`${name}: writing`);
+                            fsp.writeFile(changeExt(bundler.output, 'd.ts'), text).then(()=>{
+                                bundler.taskQueue.unref();
+                            }, err=>bundler.taskQueue.error(err));
+                        }
+                    }
+                    else if (info.ext === '.MAP') {
+                        sourceMapText = text;
+                    }
+                },
+                fileExists(fileName:string) { return bundler.resolvePath(fileName) === filepath; }
+            }, this.bundler.compilerHost);
+    
+            let diagnostics:ts.Diagnostic[]|undefined = bundler.faster ? undefined : [];
+            const program = ts.createProgram([filepath], this.bundler.tsoptions, compilerHost, undefined, diagnostics);
+            
+            if (diagnostics !== undefined)
+            {
+                diagnostics.push(...program.getSyntacticDiagnostics(sourceFile));
+                // diagnostics.push(...program.getOptionsDiagnostics());
+            }
+            
+            program.emit(
+                /*targetSourceFile*/ undefined, 
+                /*writeFile*/ undefined, 
+                /*cancellationToken*/ undefined, 
+                /*emitOnlyDtsFiles*/ undefined, 
+                { 
+                    after: [factory] 
+                });
+            
+            if (diagnostics !== undefined && diagnostics.length !== 0)
+            {
+                doNotSave = true;
+                this.bundler.main.reportFromDiagnostics(diagnostics);
+            }
+            if (!content)
+            {
+                if (diagnostics === undefined)
+                {
+                    diagnostics = [...program.getSyntacticDiagnostics(sourceFile)];
+                    this.bundler.main.reportFromDiagnostics(diagnostics);
+                }
+                this.bundler.main.reportMessage(6053, `Failed to parse ${filepath}`);
+                return null;
+            }
+            
+            const stripper = new LineStripper(content);
+            refined.firstLineComment = stripper.strip(line=>line.startsWith('#'));
+            stricted = (stripper.strip(line=>line==='"use strict";') !== null) || (stripper.strip(line=>line==="'use strict';") !== null);
+            stripper.strip(line=>line==='Object.defineProperty(exports, "__esModule", { value: true });');
+            stripper.strip(line=>line==='exports.__esModule = true;');
+        
+            let lastLineIdx = content.lastIndexOf('\n')+1;
+            let contentEnd = content.length;
+            const lastLine = content.substr(lastLineIdx);
+            if (lastLine.startsWith('//# sourceMappingURL='))
+            {
+                lastLineIdx -= 2;
+                if (content.charAt(lastLineIdx) !== '\r') lastLineIdx++;
+                contentEnd = lastLineIdx;
+            }
+            if (this.isEntry)
+            {
+                switch (bundler.exportRule)
+                {
+                case ExportRule.Var:
+                    refined.content += `${bundler.exportVarKeyword} ${bundler.exportVarName}={};\n${bundler.constKeyword} module={exports:exports}\n`;
+                    break;
+                }
+            }
+            else
+            {
+                const useStrict = !bundler.tsoptions.alwaysStrict && stricted;
+    
+                if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015)
+                {
+                    refined.content += `${refined.id.varName}(){\n`;
+                }
+                else
+                {
+                    refined.content += `${refined.id.varName}:function(){\n`;
+                }
+                if (useStrict) refined.content += '"use strict";\n';
+                
+                refined.content += `if(${bundler.globalVarName}.${refined.id.varName}.exports) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
+                refined.content += `${bundler.constKeyword} exports=${bundler.globalVarName}.${refined.id.varName}.exports={};\n`;
+                if (useModule) refined.content += `${bundler.constKeyword} module={exports:exports};\n`;
+            }
+    
+            if (useFileName || useDirName)
+            {
+                const rpath = path.relative(bundler.output, this.id.apath);
+                if (useFileName) refined.content += `${bundler.constKeyword} __filename=${JSON.stringify(rpath)};\n`;
+                if (useDirName) refined.content += `${bundler.constKeyword} __dirname=${JSON.stringify(path.dirname(rpath))};\n`;
+            }
+            refined.content += stripper.strippedComments;
+    
+            refined.sourceMapOutputLineOffset = count(refined.content, '\n') - stripper.stripedLine;
+            refined.content += content.substring(stripper.index, contentEnd);
+            if (!this.isEntry)
+            {
+                if (useModule) refined.content += `\nreturn ${bundler.globalVarName}.${refined.id.varName}.exports=module.exports;\n`;
+                else refined.content += `\nreturn exports;\n`;
+                refined.content += `},\n`;
+            }
+            refined.sourceMapText = sourceMapText;
         }
+
+        refined.outputLineCount = count(refined.content, '\n');
+        if (!doNotSave) refined.save(bundler);
         return refined;
     }
 
-    async load():Promise<void>
+    async append():Promise<RefinedModule|null>
     {
-        const refined = await this.refine();
-        if (refined === null) return;
-        await this.bundler.write(refined);
+        let refined = await RefinedModule.loadCacheIfNotModified(this.id, this.bundler.tsconfigMtime);
+        if (refined === null)
+        {
+            refined = await this._refine();
+            if (refined === null) return null;
+        }
+
+        const bundler = this.bundler;
+        const n = refined.importPathes.length;
+        if (n !== this.children.length)
+        {
+            this.children.length = n;
+            for (let i=0;i<n;i++)
+            {
+                this.children[i] = bundler.getModule(this, false, refined.importModulePathes[i], refined.importPathes[i]);
+            }
+            this.importLines = refined.importLines;
+        }
+        for (let i=0;i<n;i++)
+        {
+            const module = this.children[i];
+            if (module.isAppended) continue;
+            module.isAppended = true;
+            bundler.taskQueue.run(async()=>{
+                const refined = await module.append();
+                if (refined === null) return;
+                await bundler.write(refined);
+                memoryCache.release(refined.id.number, refined);
+            });
+        }
+        return refined;
     }
 }
 
@@ -881,6 +1152,29 @@ export interface BundlerModuleId
     number:number;
     varName:string;
     apath:string;
+}
+
+function getOutFileName(options:TsConfig, name:string):string
+{
+    if (options.output)
+    {
+        const filename = path.basename(name);
+        const ext = path.extname(filename);
+        
+        const varmap = new Map<string, string>();
+        varmap.set('name', filename.substr(0, filename.length - ext.length));
+        varmap.set('dirname', path.dirname(name));
+
+        const regex = /\[.+\]/g;
+        return options.output.replace(regex, matched=>{
+            return varmap.get(matched) || process.env[matched] || '';
+        });
+    }
+    else
+    {
+        const ext = path.extname(name);
+        return name.substr(0, name.length - ext.length)+'.bundle.js';
+    }
 }
 
 export class BundlerMainContext
@@ -953,7 +1247,7 @@ export class BundlerMainContext
         fs.writeFileSync(cacheMapPath, JSON.stringify(output), 'utf-8');
     }
 
-    reportFromDiagnostics(diagnostics:ts.Diagnostic[]):void
+    reportFromDiagnostics(diagnostics:readonly ts.Diagnostic[]):void
     {
         this.errorCount++;
         console.error(ts.formatDiagnosticsWithColorAndContext(diagnostics, defaultFormatHost));
@@ -1020,7 +1314,7 @@ export class BundlerMainContext
 
     clearCache(bundler:Bundler, modules:Map<string, BundlerModule>):void
     {
-        const map = this.cache[bundler.entry];
+        const map = this.cache[bundler.entryApath];
         if (!map) return;
 
         const names = new Set<string>(modules.keys());
@@ -1031,10 +1325,10 @@ export class BundlerMainContext
         }
     }
 
-    getModuleId(bundler:Bundler, apath:string):BundlerModuleId
+    getModuleId(bundler:Bundler, apath:string, isEntry:boolean):BundlerModuleId
     {
-        let map = this.cache[bundler.entry];
-        if (!map) this.cache[bundler.entry] = map = {};
+        let map = this.cache[bundler.entryApath];
+        if (!map) this.cache[bundler.entryApath] = map = {};
 
         let id = map[apath];
         if (id === undefined)
@@ -1049,20 +1343,28 @@ export class BundlerMainContext
                 number = this.cacheUnusingId.pop()!;
             }
             
-            let varName = path.basename(apath);
-            const dotidx = varName.lastIndexOf('.');
-            if (dotidx !== -1) varName = varName.substr(0, dotidx);
-            if (varName === 'index')
-            {
-                varName = path.basename(path.dirname(apath));
-            }
-            
+
             id = {
                 number: number,
                 apath,
                 varName: ''
             };
-            id.varName = bundler.allocModuleVarName(id, varName)
+            if (isEntry)
+            {
+                id.varName = 'entry';
+                bundler.restoreModuleVarName(id);
+            }
+            else
+            {
+                let varName = path.basename(apath);
+                const dotidx = varName.lastIndexOf('.');
+                if (dotidx !== -1) varName = varName.substr(0, dotidx);
+                if (varName === 'index')
+                {
+                    varName = path.basename(path.dirname(apath));
+                }
+                id.varName = bundler.allocModuleVarName(id, varName)
+            }
             map[apath] = id;
             this.cacheJsonModified = true;
         }
@@ -1071,51 +1373,50 @@ export class BundlerMainContext
 
     private _makeBundlers(options:TsConfig, basedir:string, tsconfig:string|null, compilerOptions:ts.CompilerOptions):Bundler[]
     {
-        const varmap = new Map<string, string>();
-
-        function getOutFileName(name:string):string
+        for (const key in defaultCompilerOptions)
         {
-            if (options.output)
-            {
-                const filename = path.basename(name);
-                const ext = path.extname(filename);
-                varmap.set('name', filename.substr(0, filename.length - ext.length));
-                varmap.set('dirname', path.dirname(name));
-
-                const regex = /\[.+\]/g;
-                return options.output.replace(regex, matched=>{
-                    return varmap.get(matched) || process.env[matched] || '';
-                });
-            }
-            else
-            {
-                const ext = path.extname(name);
-                return name.substr(0, name.length - ext.length)+'.bundle.js';
-            }
+            if (compilerOptions[key] !== undefined) continue;
+            compilerOptions[key] = defaultCompilerOptions[key];
         }
+
+        if (compilerOptions.module !== ts.ModuleKind.CommonJS)
+        {
+            if (compilerOptions.module === undefined) compilerOptions.module = ts.ModuleKind.None;
+            options.bundlerOptions = Object.assign({}, options.bundlerOptions);
+            options.bundlerOptions.module = ts.ModuleKind[compilerOptions.module!];
+            compilerOptions.module = ts.ModuleKind.CommonJS;
+        }
+
         let entry = options.entry;
         if (entry === undefined)
         {
             const name = './index.ts';
-            entry = {[name]: getOutFileName(name)};
+            entry = {[name]: getOutFileName(options, name)};
         }
         else if (typeof entry === 'string')
         {
-            entry = {[entry]: getOutFileName(entry)};
+            entry = {[entry]: getOutFileName(options, entry)};
         }
         else if (entry instanceof Array)
         {
             const out:Record<string, string> = {};
             for (const filepath of entry)
             {
-                out[filepath] = getOutFileName(filepath);
+                out[filepath] = getOutFileName(options, filepath);
             }
             entry = out;
         }
         const bundlers:Bundler[] = [];
         for (const entryfile in entry)
         {
-            const output = entry[entryfile];
+            let output = entry[entryfile];
+            let newoptions = options;
+            if (typeof output === 'object')
+            {
+                newoptions = Object.assign({}, newoptions);
+                newoptions.bundlerOptions = Object.assign({}, output, newoptions.bundlerOptions);
+                output = getOutFileName(newoptions, entryfile);
+            }
             const resolvedOutput = path.resolve(basedir, output);
             if (this.outputs.has(resolvedOutput))
             {
@@ -1124,9 +1425,9 @@ export class BundlerMainContext
             }
             try
             {
-                const bundler = new Bundler(this, basedir, entryfile, resolvedOutput, options, tsconfig, compilerOptions);
+                const bundler = new Bundler(this, basedir, entryfile, resolvedOutput, newoptions, tsconfig, compilerOptions);
                 bundlers.push(bundler);
-                const cache = this.cache[bundler.entry];
+                const cache = this.cache[bundler.entryApath];
                 for (const apath in cache)
                 {
                     const moduleId = cache[apath];
@@ -1194,7 +1495,7 @@ export class BundlerMainContext
                     { entry: configPath, output }, 
                     basedir,
                     null,
-                    ts.getDefaultCompilerOptions());
+                    {});
             }
         }
         catch (err)
@@ -1349,6 +1650,8 @@ export function bundleWatch(entries:string[], output?:string):void
         let clearConsole = false;
         let watchWaiting = 0;
         let watchWaitingCount = 0;
+        let cacheMemory = 0;
+        let cacheMemoryCount = 0;
         for (const bundler of bundlers)
         {
             if (bundler.clearConsole) clearConsole = true;
@@ -1357,9 +1660,17 @@ export function bundleWatch(entries:string[], output?:string):void
                 watchWaiting += bundler.watchWaiting;
                 watchWaitingCount ++;
             }
+            if (bundler.cacheMemory !== undefined)
+            {
+                cacheMemory += bundler.cacheMemory;
+                cacheMemoryCount ++;
+            }
         }
         if (watchWaitingCount === 0) watchWaiting = 30;
         else watchWaiting /= watchWaitingCount;
+        if (cacheMemoryCount === 0) cacheMemory = CACHE_MEMORY_DEFAULT;
+        else cacheMemory /= cacheMemoryCount;
+        memoryCache.maximum = cacheMemory;
 
         // watch
         const watcher = new FilesWatcher<Bundler>(watchWaiting, async(list)=>{

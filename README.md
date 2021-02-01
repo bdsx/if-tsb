@@ -15,7 +15,7 @@ if-tab --clear-cache # clear cache
 
 ### tsconfig.json
 
-* define entry  
+* define a entry  
 ```js
 {
     "entry": "./entry.ts", // output: "./entry.bundle.js"
@@ -24,7 +24,7 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* define multiple entry  
+* define multiple entries  
 ```js
 {
     "entry": ["./entry.ts", "./entry2.ts"], // output: "./entry.bundle.js", "./entry2.bundle.js"
@@ -33,7 +33,7 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* define entry with specific output  
+* define entries with specific output  
 ```js
 {
     "entry": {
@@ -45,10 +45,10 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* define entry with specific output alternate  
+* define entries with specific output alternate  
 ```js
 {
-    "entry": "./entry.ts",
+    "entry": ["./entry.ts", "./entry2.ts"],
     "output": "./bundled.[name].js", // output: "./bundled.entry.js"
     "compilerOptions": {
         /* ... */
@@ -69,7 +69,27 @@ if-tab --clear-cache # clear cache
         "watchWaiting": 30, // bundling after ${watchWaiting}ms from file modifying
         "verbose": false,
         "bundleExternals":false, // bundle files in node_modules
-        "externals": [] // files that do not bundle
+        "externals": [], // files that do not bundle
+        "cacheMemory": "1MB", // cache memory for watching
+        "export": null // "node"|"es"|"amd"|"umd"|"self"|"window"|"this"|"var (varname)"|null
+    },
+    "compilerOptions": {
+        /* ... */
+    }
+}
+```
+* define entries with bundler options  
+```js
+{
+    "entry": {
+        "./entry.ts": {
+            "output": "./bundled.output.js",
+            "...bundlerOptions": "...bundlerOptions"
+        },
+        "./entry2.ts": {
+            "output": "./bundled.output2.js",
+            "...bundlerOptions": "...bundlerOptions"
+        }
     },
     "compilerOptions": {
         /* ... */
@@ -86,3 +106,9 @@ bundle(['./entry.ts'] /*, './output.js' */); // build
 // bundleWatch(['./entry.ts']); // watch
 
 ```
+
+### Links
+* [Discord](https://discord.gg/pC9XdkC)
+* [Bug Report/Issues](https://github.com/bdsx/if-tsb/issues)
+* [Donate]
+<iframe src="https://rua.kr/webapp/donate" frameborder="0"></iframe>

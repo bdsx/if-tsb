@@ -108,15 +108,6 @@ export function concurrency<T,R>(items:T[], forEach:(item:T)=>Promise<R>):Promis
     return Promise.all(promises).then(()=>out);
 }
 
-export function identifierValidating(name:string):string
-{
-    name = name.replace(/[^0-9A-Za-z$_\u007f-\uffff]+/g, '_');
-    if (name === '') return '_';
-    const first = name.charCodeAt(0);
-    if (0x30 <= first && first <= 0x39) return '_'+name;
-    return name;
-}
-
 export function instanceProxy(instance:any):void
 {
 
@@ -149,6 +140,18 @@ export function changeExt(filepath:string, ext:string):string
 export function time():string
 {
     return new Date().toLocaleTimeString();
+}
+
+export function count(content:string, chr:string):number
+{
+    const code = chr.charCodeAt(0);
+    const n = content.length;
+    let count = 0;
+    for (let i=0;i<n;i++)
+    {
+        if (content.charCodeAt(i) === code) count++;
+    }
+    return count;
 }
 
 const EMPTY = {};
@@ -316,136 +319,6 @@ export class SkipableTaskQueue
     }
 }
 
-class WatchItem<T>
-{
-    public readonly targets = new Set<T>();
-
-    constructor(public readonly path:string, private readonly watcher:fs.FSWatcher)
-    {
-    }
-
-    close():void
-    {
-        this.targets.clear();
-        this.watcher.close();
-    }
-}
-
-export class FilesWatcher<T>
-{
-    private readonly watching = new Map<string, WatchItem<T>>();
-    private readonly modified = new Set<WatchItem<T>>();
-    private timeout: NodeJS.Timer|null = null;
-    private paused = false;
-
-    constructor(private readonly waiting = 100, private readonly onchange:(ev:IterableIterator<[T, string[]]>)=>void)
-    {
-    }
-
-    pause():void
-    {
-        this.paused = true;
-        if (this.timeout !== null)
-        {
-            clearTimeout(this.timeout);
-            this.timeout = null;
-        }
-    }
-
-    resume():void
-    {
-        if (!this.paused) return;
-        this.paused = false;
-        if (this.modified.size !== 0)
-        {
-            this._fire();
-        }
-    }
-
-    private _fire():void
-    {
-        if (this.timeout === null)
-        {
-            this.timeout = setTimeout(()=>{
-                this.timeout = null;
-                const targets = new Map<T, string[]>();
-                for (const item of this.modified.values())
-                {
-                    for (const target of item.targets)
-                    {
-                        let files = targets.get(target);
-                        if (!files) targets.set(target, [item.path]);
-                        else files.push(item.path);
-                    }
-                }
-                this.modified.clear();
-                this.onchange(targets.entries());
-            }, this.waiting);
-        }
-    }
-
-    add(target:T, file:string):void
-    {
-        let item = this.watching.get(file);
-        if (item)
-        {
-            item.targets.add(target);
-            return;
-        }
-
-        const watcher = fs.watch(file, 'utf-8');
-        watcher.on('change', ()=>{
-            this.modified.add(item!);
-            if (this.paused) return;
-            this._fire();
-        });
-        item = new WatchItem(file, watcher);
-        item.targets.add(target);
-        this.watching.set(file, item);
-    }
-
-    private _remove(target:T, item:WatchItem<T>):void
-    {
-        if (!item.targets.delete(target)) return;
-        if (item.targets.size === 0)
-        {
-            this.watching.delete(item.path);
-            this.modified.delete(item);
-            item.close();
-        }
-    }
-
-    clear(target:T):void
-    {
-        for (const item of this.watching.values())
-        {
-            this._remove(target, item);
-        }
-    }
-
-    reset(target:T, files:string[]):void
-    {
-        const set = new Set<string>();
-        for (const file of this.watching.keys())
-        {
-            set.add(file);
-        }
-
-        for (const file of files)
-        {
-            set.delete(file);
-            this.add(target, file);
-        }
-
-        for (const file of set)
-        {
-            const item = this.watching.get(file)!;
-            this._remove(target, item);
-        }
-    }
-
-}
-
 const _kindMap = new Map<string, ts.ScriptKind>();
 _kindMap.set('.TS', ts.ScriptKind.TS);
 _kindMap.set('.TSX', ts.ScriptKind.TSX);
@@ -475,192 +348,99 @@ export function getScriptKind(filepath:string):{kind:ts.ScriptKind, ext:string}
     return {kind, ext};
 }
 
-function processMkdirError(dirname:string, err:any):boolean
+export function parsePostfix(str:string|number|undefined):number|undefined
 {
-    if (err.code === 'EEXIST') {
-        return true;
+    switch (typeof str)
+    {
+    case 'string': break;
+    case 'number': return str;
+    default: return undefined;
     }
-    if (err.code === 'ENOENT') {
-        throw new Error(`EACCES: permission denied, mkdir '${dirname}'`);
+    const n = str.length;
+    let value = 0;
+    for (let i=0;i<n;i++)
+    {
+        const code = str.charCodeAt(i);
+        if (0x30 <= code && code <= 0x39)
+        {
+            value *= 10;
+            value += code - 0x30;
+            continue;
+        }
+        if (i !== n-1)
+        {
+            console.error(`Unknown nummer character: ${str.charAt(i)}`);
+            continue;
+        }
+        switch (code)
+        {
+        case 0x62: case 0x42:
+            break;
+        case 0x6b: case 0x4b: // K
+            value *= 1024;
+            break;
+        case 0x6d: case 0x4d: // M
+            value *= 1024*1024;
+            break;
+        case 0x67: case 0x47: // G
+            value *= 1024*1024*1024;
+            break;
+        case 0x74: case 0x54: // T
+            value *= 1024*1024*1024*1024;
+            break;
+        default:
+            console.error(`Unknown number postfix: ${str.charAt(i)}`);
+            break;
+        }
+        break;
     }
-    return false;
+    return value;
 }
 
-export namespace namelock
+export function joinModulePath(...pathes:string[]):string
 {
-    const locks = new Map<string|number, (()=>void)[]>();
-    export function lock(name:string|number):Promise<void>
-    {
-        const locked = locks.get(name);
-        if (locked)
-        {
-            return new Promise(resolve=>{
-                locked.push(resolve);
-            });
-        }
-        locks.set(name, []);
-        return resolved;
-    }
-    export function unlock(name:string|number):void
-    {
-        const locked = locks.get(name)!;
-        if (locked.length === 0)
-        {
-            locks.delete(name);
-            return;
-        }
-        locked.shift()!();
-    }
-    export async function waitAll():Promise<void>
-    {
-        const proms:Promise<void>[] = [];
-        for (const arr of locks.values())
-        {
-            proms.push(new Promise(resolve=>{
-                arr.push(resolve);
-            }));
-        }
-        await Promise.all(proms);
-    }
-}
+    const out:string[] = [];
+    let backcount = 0;
 
-export namespace fsp
-{
-    export function unlink(path:string):Promise<void>
+    let absolute:string|null = null;
+    for (const child of pathes)
     {
-        return new Promise((resolve, reject)=>fs.unlink(path, (err)=>{
-            if (err) reject(err);
-            else resolve();
-        }))
-    }
-    export function mkdir(path:string):Promise<void>
-    {
-        return new Promise((resolve, reject)=>fs.mkdir(path, (err)=>{
-            if (err) reject(err);
-            else resolve();
-        }))
-    }
-    export function readFile(path:string):Promise<string>
-    {
-        return new Promise((resolve, reject)=>fs.readFile(path, 'utf-8', (err, data)=>{
-            if (err) reject(err);
-            else resolve(data);
-        }))
-    }
-    export function writeFile(path:string, data:string):Promise<void>
-    {
-        return new Promise((resolve, reject)=>fs.writeFile(path, data, 'utf-8', (err)=>{
-            if (err) reject(err);
-            else resolve();
-        }))
-    }
-    export function stat(path:string):Promise<fs.Stats>
-    {
-        return new Promise((resolve, reject)=>fs.stat(path, (err, data)=>{
-            if (err) reject(err);
-            else resolve(data);
-        }))
-    }
-    export function readdir(path:string):Promise<string[]>
-    {
-        return new Promise((resolve, reject)=>fs.readdir(path, (err, out)=>{
-            if (err) reject(err);
-            else resolve(out);
-        }));
-    }
-        
-    export async function mkdirRecursive(dirpath:string):Promise<void> {
-        const sep = path.sep;
-        dirpath = path.resolve(dirpath);
-        
-        let index = dirpath.indexOf(sep)+1;
-        if (index === 0) return;
+        let prev = 0;
+
+        if (!child.startsWith('.'))
+        {
+            out.length = 0;
+            backcount = 0;
+            const dot = child.indexOf('/', prev);
+            absolute = (dot === -1) ? child.substr(prev) : child.substring(prev, dot);
+            if (dot === -1) break;
+            prev = dot + 1;
+        }
 
         for (;;)
         {
-            const nextsep = dirpath.indexOf(sep, index);
-            if (nextsep === -1)
+            const dot = child.indexOf('/', prev);
+            const partname = (dot === -1) ? child.substr(prev) : child.substring(prev, dot);
+            switch (partname)
             {
-                try {
-                    await fsp.mkdir(dirpath);
-                } catch (err) {
-                    if (!processMkdirError(dirpath, err))
-                    {
-                        throw err;
-                    }
+            case '.': break;
+            case '..':
+                if (!out.pop())
+                {
+                    backcount++;
                 }
                 break;
+            default:
+                out.push(partname);
+                break;
             }
-            index = nextsep+1;
-            const dirname = dirpath.substr(0, nextsep);
-            try {
-                await fsp.mkdir(dirname);
-            } catch (err) {
-                if (!processMkdirError(dirname, err))
-                {
-                    if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
-                        throw err;
-                    }
-                }
-            }
+            if (dot === -1) break;
+            prev = dot + 1;
         }
     }
-    export async function deleteAll(filepath:string):Promise<number>
-    {
-        let count = 0;
-        try
-        {
-            const stat = await fsp.stat(filepath);
-            if (stat.isDirectory())
-            {
-                for (const file of await readdir(filepath))
-                {
-                    count += await deleteAll(path.join(filepath, file));
-                }
-            }
-            await fsp.unlink(filepath);
-            count++;
-        }
-        catch (err)
-        {
-        }
-        return count;
-    }
-}
-
-export function mkdirRecursiveSync(dirpath:string):void {
-    const sep = path.sep;
-    dirpath = path.resolve(dirpath);
-    
-    let index = dirpath.indexOf(sep)+1;
-    if (index === 0) return;
-    
-    for (;;)
-    {
-        const nextsep = dirpath.indexOf(sep, index);
-        if (nextsep === -1)
-        {
-            try {
-                fs.mkdirSync(dirpath);
-            } catch (err) {
-                if (!processMkdirError(dirpath, err))
-                {
-                    throw err;
-                }
-            }
-            break;
-        }
-        index = nextsep+1;
-        const dirname = dirpath.substr(0, nextsep);
-        try {
-            fs.mkdirSync(dirname);
-        } catch (err) {
-            if (!processMkdirError(dirname, err))
-            {
-                if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
-                    throw err;
-                }
-            }
-        }
-    }
+    let outstr = '';
+    if (absolute !== null) outstr += absolute + '/';
+    outstr += '../'.repeat(backcount);
+    if (out.length === 0) return outstr.substr(0, outstr.length-1);
+    else return outstr + out.join('/');
 }

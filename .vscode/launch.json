@@ -45,6 +45,34 @@
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Bundle Closure Compiler",
+            "console": "integratedTerminal",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "node_modules/ts-node/dist/bin.js",
+            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\js\\vscode-closure-compiler", "-w", "--clear-cache"],
+            "outFiles": [
+                "${workspaceFolder}/**/*.js"
+            ]
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Bundle Red Print",
+            "console": "integratedTerminal",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "node_modules/ts-node/dist/bin.js",
+            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\js\\redprint", "-w", "--clear-cache"],
+            "outFiles": [
+                "${workspaceFolder}/**/*.js"
+            ]
         }
     ]
 }
