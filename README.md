@@ -111,4 +111,4 @@ bundle(['./entry.ts'] /*, './output.js' */); // build
 ### Links
 * [Discord](https://discord.gg/pC9XdkC)
 * [Bug Report/Issues](https://github.com/bdsx/if-tsb/issues)
-* [Donate](https://rua.kr/webapp/donate)
+* [Donate/PayPal](https://rua.kr/webapp/donate)
