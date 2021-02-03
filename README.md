@@ -71,7 +71,8 @@ if-tab --clear-cache # clear cache
         "bundleExternals":false, // bundle files in node_modules
         "externals": [], // files that do not bundle
         "cacheMemory": "1MB", // cache memory for watching
-        "module": "none" // "commonjs"|"none"|"self"|"window"|"this"|"var (varname)"||"let (varname)"|"const (varname)"
+        "module": "none", // "commonjs"|"none"|"self"|"window"|"this"|"var (varname)"||"let (varname)"|"const (varname)"
+        "preimport": [], // modules for pre-import. it replaces require('name') to __tsb.__m.name
     },
     "compilerOptions": {
         /* ... */

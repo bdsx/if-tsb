@@ -87,6 +87,7 @@ export interface BundlerOptions
     externals?:string[];
     cacheMemory?:number|string;
     module?:string;
+    preimport?:string[];
 }
 
 export interface BundlerOptionsWithOutput extends BundlerOptions
@@ -250,7 +251,7 @@ export class Bundler
     private lineOffset = 0;
     public entryModuleIsAccessed = false;
     public useDirNameResolver = false;
-    public readonly preimport = new Set<string>();
+    public readonly preimport = new Map<string, string>();
 
     public readonly output:string;
     public readonly outdir:string;
@@ -279,6 +280,7 @@ export class Bundler
     public readonly entryApath:string;
     public readonly entryRpath:string;
     public readonly constKeyword:string;
+    public readonly preimportTargets:Set<string>;
 
     private csResolve:(()=>void)[] = [];
     private csEntered = false;
@@ -365,6 +367,9 @@ export class Bundler
         this.watchWaiting = boptions.watchWaiting;
         this.bundleExternals = boptions.bundleExternals || false;
         this.externals = boptions.externals ? boptions.externals.map(glob=>globToRegExp(glob)) : [];
+        this.preimportTargets = new Set(boptions.preimport);
+        this.preimportTargets.add('tslib');
+
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
         if (boptions.module === undefined)
         {
@@ -770,6 +775,24 @@ export class Bundler
         this.modules.set(apath, module);
         return module;
     }
+
+    getPreimportVarName(mpath:string):string {
+        let varname = identifierValidating(mpath);
+        let num = 2;
+        
+        const base = varname;
+        for (;;) {
+            const old = this.preimport.get(varname);
+            if (old === undefined) {
+                this.preimport.set(varname, mpath);
+                break;
+            }
+            if (old === mpath) break;
+            varname = base + num;
+            num++;
+        }
+        return varname;
+    }
 }
 
 export class BundlerModule
@@ -871,6 +894,15 @@ export class BundlerModule
         const factory = (ctx:ts.TransformationContext)=>{
             const stacks:ts.Node[] = [];
 
+            const preimport = (importName:string)=>{
+                const varname = bundler.getPreimportVarName(importName);
+                return ctx.factory.createPropertyAccessExpression(
+                    ctx.factory.createPropertyAccessExpression(
+                        ctx.factory.createIdentifier(this.bundler.globalVarName),
+                        ctx.factory.createIdentifier('__m')),
+                        ctx.factory.createIdentifier(varname));
+            };
+
             const getErrorPosition = ():ErrorPosition|null=>{
                 for (let i = stacks.length-1; i >= 0; i--)
                 {
@@ -907,14 +939,13 @@ export class BundlerModule
                 const mpath = joinModulePath(this.mpath, importName);
                 if (mpath === 'path')
                 {
-                    bundler.preimport.add('path');
-                    return ctx.factory.createPropertyAccessExpression(
-                        ctx.factory.createPropertyAccessExpression(
-                            ctx.factory.createIdentifier(this.bundler.globalVarName),
-                            ctx.factory.createIdentifier('__m')),
-                            ctx.factory.createIdentifier('path'));
+                    return preimport('path');
                 }
-                for (const glob of this.bundler.externals)
+                if (bundler.preimportTargets.has(mpath))
+                {
+                    return preimport(mpath);
+                }
+                for (const glob of bundler.externals)
                 {
                     if (glob.test(mpath)) return base;
                 }
@@ -925,16 +956,11 @@ export class BundlerModule
                 const info = module.resolvedModule;
                 if (!info)
                 {
-                    if (!importName.startsWith('.'))
+                    if (!mpath.startsWith('.'))
                     {
-                        if (builtin.has(importName))
+                        if (builtin.has(mpath))
                         {
-                            bundler.preimport.add(importName);
-                            return ctx.factory.createPropertyAccessExpression(
-                                ctx.factory.createPropertyAccessExpression(
-                                    ctx.factory.createIdentifier(this.bundler.globalVarName),
-                                    ctx.factory.createIdentifier('__m')),
-                                    ctx.factory.createIdentifier(importName));
+                            return preimport(mpath);
                         }
                         if (!this.bundler.bundleExternals) return base;
                     }
