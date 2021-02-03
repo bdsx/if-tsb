@@ -54,6 +54,7 @@ export class MemoryManager<T extends {clear():void, size:number, _key?:string|nu
         if (this.timer === null)
         {
             this.timer = setTimeout(this._pollTimer, this.cacheTimeout+1);
+            this.timer.unref();
         }
     }
 
@@ -74,6 +75,7 @@ export class MemoryManager<T extends {clear():void, size:number, _key?:string|nu
                 continue;
             }
             this.timer = setTimeout(this._pollTimer, remained+1);
+            this.timer.unref();
             return;
         }
     };
