@@ -1105,10 +1105,10 @@ export class BundlerModule
                     this.error(null, IfTsbError.Unsupported, `if-tsb does not support export JSON to ${bundler.exportVarName}`);
                     break;
                 case ExportRule.Var:
-                    refined.content += `return ${sourceFile.text};\n`;
+                    refined.content += `return ${sourceFile.text.trim()};\n`;
                     break;
                 default:
-                    refined.content += `module.exports=${sourceFile.text};\n`;
+                    refined.content += `module.exports=${sourceFile.text.trim()};\n`;
                     break;
                 }
             }
