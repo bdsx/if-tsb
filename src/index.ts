@@ -646,9 +646,9 @@ export class Bundler
         if (this.preimport.size !== 0)
         {
             await writer!.write(`__m:{\n`);
-            for (const name of this.preimport.values())
+            for (const [varname, mpath] of this.preimport.entries())
             {
-                await writer!.write(`    ${name}:require('${name}'),\n`);
+                await writer!.write(`    ${varname}:require('${mpath}'),\n`);
                 this.lineOffset ++;
             }
             await writer!.write(`},\n`);
