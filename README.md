@@ -71,7 +71,7 @@ if-tab --clear-cache # clear cache
         "bundleExternals":false, // bundle files in node_modules
         "externals": [], // files that do not bundle
         "cacheMemory": "1MB", // cache memory for watching
-        "export": null // "node"|"es"|"amd"|"umd"|"self"|"window"|"this"|"var (varname)"|null
+        "module": "none" // "commonjs"|"none"|"self"|"window"|"this"|"var (varname)"||"let (varname)"|"const (varname)"
     },
     "compilerOptions": {
         /* ... */

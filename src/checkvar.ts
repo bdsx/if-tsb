@@ -1,8 +1,5 @@
 
 const reservedWords = {
-    // for if-tsb
-    'entry': true,
-
     'do': true,
     'if': true,
     'in': true,
@@ -54,6 +51,13 @@ const reservedWords = {
     'NaN':true,
     'Infinity':true,
     'undefined':true,
+    
+    // for if-tsb
+    '__entry': true,
+    '__filename':true,
+    '__dirname':true,
+    '__resolve':true,
+    '__m':true,
 };
 
 export function identifierValidating(name:string):string

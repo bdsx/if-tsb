@@ -440,7 +440,12 @@ export function joinModulePath(...pathes:string[]):string
     }
     let outstr = '';
     if (absolute !== null) outstr += absolute + '/';
-    outstr += '../'.repeat(backcount);
+    if (backcount === 0)
+    {
+        if (absolute === null) outstr += './';
+    }
+    else outstr += '../'.repeat(backcount);
+    
     if (out.length === 0) return outstr.substr(0, outstr.length-1);
     else return outstr + out.join('/');
 }
