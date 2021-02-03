@@ -663,7 +663,7 @@ export class Bundler
             {
                 await writer!.write(`__resolve:function(rpath){\n`);
             }
-            await writer!.write(`return this.__m.path.join(this.__dirname, rpath)\n},\n`);
+            await writer!.write(`return this.__m.${this.getPreimportVarName('path')}.join(this.__dirname, rpath)\n},\n`);
             if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
             {
                 await writer!.write(`__dirname,\n`);
@@ -1281,7 +1281,7 @@ export class BundlerModule
                 {
                     if (path.sep !== '/') rpath = rpath.split(path.sep).join('/');
                     refined.content += `${prefix}__filename=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
-                    bundler.preimport.add('path');
+                    bundler.getPreimportVarName('path');
                     bundler.useDirNameResolver = true;
                 }
                 if (useDirName)
@@ -1289,7 +1289,7 @@ export class BundlerModule
                     rpath = path.dirname(rpath);
                     if (path.sep !== '/') rpath = rpath.split(path.sep).join('/');
                     refined.content += `${prefix}__dirname=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
-                    bundler.preimport.add('path');
+                    bundler.getPreimportVarName('path');
                     bundler.useDirNameResolver = true;
                 }
             }
