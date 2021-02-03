@@ -369,6 +369,7 @@ export class Bundler
         this.externals = boptions.externals ? boptions.externals.map(glob=>globToRegExp(glob)) : [];
         this.preimportTargets = new Set(boptions.preimport);
         this.preimportTargets.add('tslib');
+        this.preimport.set('path', 'path');
 
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
         if (boptions.module === undefined)
@@ -777,20 +778,8 @@ export class Bundler
     }
 
     getPreimportVarName(mpath:string):string {
-        let varname = identifierValidating(mpath);
-        let num = 2;
-        
-        const base = varname;
-        for (;;) {
-            const old = this.preimport.get(varname);
-            if (old === undefined) {
-                this.preimport.set(varname, mpath);
-                break;
-            }
-            if (old === mpath) break;
-            varname = base + num;
-            num++;
-        }
+        const varname = identifierValidating(mpath);
+        this.preimport.set(mpath, mpath);
         return varname;
     }
 }
@@ -941,10 +930,10 @@ export class BundlerModule
                 {
                     return preimport('path');
                 }
-                if (bundler.preimportTargets.has(mpath))
-                {
-                    return preimport(mpath);
-                }
+                // if (bundler.preimportTargets.has(mpath))
+                // {
+                //     return preimport(mpath);
+                // }
                 for (const glob of bundler.externals)
                 {
                     if (glob.test(mpath)) return base;
@@ -958,10 +947,10 @@ export class BundlerModule
                 {
                     if (!mpath.startsWith('.'))
                     {
-                        if (builtin.has(mpath))
-                        {
-                            return preimport(mpath);
-                        }
+                        // if (builtin.has(mpath))
+                        // {
+                        //     return preimport(mpath);
+                        // }
                         if (!this.bundler.bundleExternals) return base;
                     }
                     doNotSave = true;
@@ -1047,23 +1036,22 @@ export class BundlerModule
                     switch (node.expression.kind)
                     {
                     case ts.SyntaxKind.ImportKeyword: {
-                    if (node.arguments.length !== 1)
-                    {
-                        doNotSave = true;
-                        this.error(getErrorPosition(), 1005, `Cannot call import with multiple parameters`);
-                        return _node;
-                    }
-                    return importFromStringLiteral(node.arguments[0], _node);
-                    }
-                    case ts.SyntaxKind.Identifier: {
-                    const identifier = node.expression as ts.Identifier;
-                    if (identifier.escapedText === 'require')
-                    {
+                        if (node.arguments.length !== 1)
+                        {
+                            doNotSave = true;
+                            this.error(getErrorPosition(), 1005, `Cannot call import with multiple parameters`);
+                            return _node;
+                        }
                         return importFromStringLiteral(node.arguments[0], _node);
                     }
-                    break;
-                    }
-                    }
+                    case ts.SyntaxKind.Identifier: {
+                        const identifier = node.expression as ts.Identifier;
+                        if (identifier.escapedText === 'require')
+                        {
+                            return importFromStringLiteral(node.arguments[0], _node);
+                        }
+                        break;
+                    }}
                     break;
                 }}
                 const ret = ts.visitEachChild(_node, visit, ctx);
