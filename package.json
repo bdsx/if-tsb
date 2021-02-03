@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "ts-node ./src/cli"
+    "build": "ts-node ./src/cli",
+    "prepare": "ts-node ./src/cli"
   },
   "repository": {
     "type": "git",
