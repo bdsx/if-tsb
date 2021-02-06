@@ -1335,7 +1335,7 @@ export class BundlerModule
     
             if (useFileName || useDirName)
             {
-                const prefix = this.isEntry ? `${bundler.constKeyword} ` : '';
+                const prefix = this.isEntry ? '' : `${bundler.constKeyword} `;
                 let rpath = path.relative(bundler.output, this.id.apath);
                 if (useFileName)
                 {
