@@ -57,7 +57,6 @@ const reservedWords = {
     '__filename':true,
     '__dirname':true,
     '__resolve':true,
-    '__m':true,
 };
 
 export function identifierValidating(name:string):string

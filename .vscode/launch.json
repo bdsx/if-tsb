@@ -27,7 +27,7 @@
                 "<node_internals>/**"
             ],
             "program": "node_modules/ts-node/dist/bin.js",
-            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\bdsx", "-w"],
+            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\bdsx", "-w", "--clear-cache"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]
@@ -41,7 +41,7 @@
                 "<node_internals>/**"
             ],
             "program": "node_modules/ts-node/dist/bin.js",
-            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\old\\bdsx", "-w"],
+            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\old\\bdsx", "-w", "--clear-cache"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]

@@ -8,14 +8,4 @@ export class ErrorPosition
         public readonly lineText:string)
     {
     }
-
-    static stringify(pos:(ErrorPosition|null)[]):string
-    {
-        return JSON.stringify(pos.map(p=>p === null ? null : [p.line, p.column, p.width, p.lineText]));
-    }
-    static parse(str:string):(ErrorPosition|null)[]
-    {
-        return JSON.parse(str);
-    }
-
 }

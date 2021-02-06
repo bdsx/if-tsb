@@ -1,12 +1,20 @@
 
-export class MemoryManager<T extends {clear():void, size:number, _key?:string|number, _next?:T, _prev?:T, _cacheTimer?:number}>
+interface Node<T>{
+    clear():void;
+    size:number;
+    _key?:string|number;
+    _next?:T;
+    _prev?:T;
+    _cacheTimer?:number;
+}
+
+export class MemoryManager<T extends Node<T>>
 {
     private readonly map = new Map<string|number, T>();
     public current = 0;
     private timer:NodeJS.Timer|null = null;
 
     private readonly cacheTimeout = 20*60*1000;
-
     private readonly axis = {} as T;
 
     constructor(public maximum = 1024*1024*1024)
@@ -15,26 +23,31 @@ export class MemoryManager<T extends {clear():void, size:number, _key?:string|nu
         this.axis._prev = this.axis;
     }
 
-    private _reduce():boolean
-    {
-        const node = this.axis._next!;
-        if (node === this.axis) return false;
+    private _detach(node:T):void {
         this.current -= node.size;
-        
+
         const next = node._next!;
-        this.axis._next = next;
-        next._prev = this.axis;
+        const prev = node._prev!;
+        prev._next = next;
+        next._prev = prev;
 
         this.map.delete(node._key!);
         delete node._prev;
         delete node._next;
         delete node._key;
         delete node._cacheTimer;
+    }
+
+    private _reduce():boolean
+    {
+        const node = this.axis._next!;
+        if (node === this.axis) return false;
+        this._detach(node);
         node.clear();
         return true;
     }
 
-    release(key:string|number, node:T):void
+    put(key:string|number, node:T):void
     {
         if (node.size > this.maximum) return;
         this.current += node.size;
@@ -79,6 +92,13 @@ export class MemoryManager<T extends {clear():void, size:number, _key?:string|nu
             return;
         }
     };
+
+    take(key:string|number):T|undefined
+    {
+        const node = this.map.get(key);
+        if (node) this._detach(node);
+        return node
+    }
 
     get(key:string|number):T|undefined
     {

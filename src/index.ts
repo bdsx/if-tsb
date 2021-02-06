@@ -21,7 +21,7 @@ import globToRegExp = require('glob-to-regexp');
 const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
-const CACHE_SIGNATURE = '\nTSBC-0.7';
+const CACHE_SIGNATURE = '\nTSBC-0.8';
 const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
 const memoryCache = new MemoryManager<RefinedModule>(CACHE_MEMORY_DEFAULT);
 const defaultCompilerOptions = ts.getDefaultCompilerOptions();
@@ -72,6 +72,16 @@ enum IfTsbError
 {
     InternalError=20000,
     Unsupported=20001,
+    JsError=20002,
+    Dupplicated=20003,
+    ModuleNotFound=6053,
+}
+
+enum ExternalMode
+{
+    NoExternal=0,
+    Manual=-1,
+    Preimport=-2
 }
 
 export interface BundlerOptions
@@ -109,14 +119,60 @@ export interface TsConfig
     compilerOptions?:ts.CompilerOptions;
 }
 
+export class ImportInfo
+{
+    constructor(
+        public readonly apath:string,
+        public readonly mpath:string,
+        public readonly codepos: ErrorPosition|null)
+    {
+    }
+
+    getExternalMode():ExternalMode|null
+    {
+        if (/^[0-9]$/.test(this.apath)) return -+this.apath;
+        return null;
+    }
+
+    static stringify(imports:ImportInfo[]):string
+    {
+        type SerializedInfo = [string, string, number?, number?, number?, string?];
+        const out:SerializedInfo[] = [];
+        for (const info of imports)
+        {
+            const line:SerializedInfo = [info.apath, info.mpath];
+            if (info.codepos !== null)
+            {
+                const pos = info.codepos;
+                line[2] = pos.line;
+                line[3] = pos.column;
+                line[4] = pos.width;
+                line[5] = pos.lineText;
+            }
+            out.push(line);
+        }
+        return JSON.stringify(out);
+    }
+    static parse(str:string):ImportInfo[]
+    {
+        const imports = JSON.parse(str);
+        const out:ImportInfo[] = [];
+        for (const [apath, mpath, line, column, width, lineText] of imports)
+        {
+            const codepos = line === undefined ? null : new ErrorPosition(line, column, width, lineText);
+            out.push(new ImportInfo(apath, mpath, codepos));
+        }
+        return out;
+    }
+
+}
+
 export class RefinedModule
 {
     firstLineComment:string|null = null;
     sourceMapOutputLineOffset:number = 0;
     outputLineCount:number;
-    importPathes:string[];
-    importModulePathes:string[];
-    importLines: (ErrorPosition|null)[];
+    imports:ImportInfo[] = [];
     sourceMapText:string|null = null;
     content:string = '';
     size:number;
@@ -130,9 +186,7 @@ export class RefinedModule
     clear():void
     {
         this.firstLineComment = null;
-        this.importModulePathes.length = 0;
-        this.importPathes.length = 0;
-        this.importLines.length = 0;
+        this.imports.length = 0;
         this.sourceMapText = null;
         this.content = '';
         this.size = 0;
@@ -146,9 +200,7 @@ export class RefinedModule
             {
                 namelock.lock(this.id.number);
                 const writer = new FileWriter(getCacheFilePath(this.id));
-                await writer.write(this.importPathes.join(path.delimiter)+'\n');
-                await writer.write(this.importModulePathes.join(path.delimiter)+'\n');
-                await writer.write(ErrorPosition.stringify(this.importLines)+'\n');
+                await writer.write(ImportInfo.stringify(this.imports)+'\n');
                 await writer.write(this.firstLineComment ? this.firstLineComment+'\n' : '\n');
                 await writer.write(this.sourceMapOutputLineOffset+'\n');
                 await writer.write(this.outputLineCount+'\n');
@@ -180,18 +232,14 @@ export class RefinedModule
         }
         if (!content.endsWith(CACHE_SIGNATURE)) throw Error('Outdated cache or failed data');
         const [
-            importPathes, 
-            importModulePathes, 
-            importLines,
+            imports, 
             firstLineComment, 
             sourceMapOutputLineOffset,
             outputLineCount,
             sourceMapText,
             source
         ] = splitContent(content, 6, '\n');
-        this.importPathes = importPathes === '' ? [] : importPathes.split(path.delimiter);
-        this.importModulePathes = importModulePathes === '' ? [] : importModulePathes.split(path.delimiter);
-        this.importLines = ErrorPosition.parse(importLines);
+        this.imports = imports === '' ? [] : ImportInfo.parse(imports);
         this.firstLineComment = firstLineComment || null;
         this.sourceMapOutputLineOffset = +sourceMapOutputLineOffset;
         this.outputLineCount = +outputLineCount;
@@ -200,11 +248,11 @@ export class RefinedModule
         this.size = this.content.length + 2048;
     }
     
-    static async loadCacheIfNotModified(id:BundlerModuleId, tsconfigMtime:number):Promise<RefinedModule|null>
+    static async getRefined(id:BundlerModuleId, tsconfigMtime:number):Promise<RefinedModule|null>
     {
         try
         {
-            const cached = memoryCache.get(id.number);
+            const cached = memoryCache.take(id.number);
             if (cached !== undefined)
             {
                 const file = await fsp.stat(id.apath);
@@ -247,11 +295,8 @@ export class Bundler
 
     private writingProm:Promise<FileWriter>|null = null;
     private mapgen:sourceMap.SourceMapGenerator|null = null;
-    private entryModule:BundlerModule|null = null;
     private lineOffset = 0;
     public entryModuleIsAccessed = false;
-    public useDirNameResolver = false;
-    public readonly preimport = new Map<string, string>();
 
     public readonly output:string;
     public readonly outdir:string;
@@ -270,7 +315,9 @@ export class Bundler
     public readonly exportVarName:string|null = null;
     public readonly needWrap:boolean;
 
-    public readonly modules = new Map<string, BundlerModule>();
+    private readonly moduleByName = new Map<string, BundlerModule>();
+    public readonly deplist:string[] = [];
+    public readonly files:string[] = [];
     public readonly taskQueue = new ConcurrencyQueue;
     private readonly sourceFileCache = new Map<string, ts.SourceFile>();
     public readonly tsconfigMtime:number;
@@ -281,6 +328,7 @@ export class Bundler
     public readonly entryRpath:string;
     public readonly constKeyword:string;
     public readonly preimportTargets:Set<string>;
+    private readonly cache:Record<string, BundlerModuleId>;
 
     private csResolve:(()=>void)[] = [];
     private csEntered = false;
@@ -296,6 +344,7 @@ export class Bundler
     {
         this.entryApath = path.join(this.basedir, entry);
         this.entryRpath = path.relative(this.basedir, this.entryApath);
+        this.cache = main.getCacheMap(this.entryApath);
 
         if (this.tsoptions.target === undefined)
         {
@@ -369,7 +418,6 @@ export class Bundler
         this.externals = boptions.externals ? boptions.externals.map(glob=>globToRegExp(glob)) : [];
         this.preimportTargets = new Set(boptions.preimport);
         this.preimportTargets.add('tslib');
-        this.preimport.set('path', 'path');
 
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
         if (boptions.module === undefined)
@@ -459,6 +507,52 @@ export class Bundler
         resolve();
     }
 
+    getModuleId(apath:string, mode:ExternalMode, forceModuleName:string|null):BundlerModuleId
+    {
+        let id = this.cache[apath];
+        if (id === undefined)
+        {
+            id = {
+                number: mode === ExternalMode.NoExternal ? this.main.allocateCacheId() : mode,
+                apath,
+                varName: ''
+            };
+            if (mode === ExternalMode.Manual)
+            {
+                forceModuleName = apath;
+            }
+            if (forceModuleName !== null)
+            {
+                id.varName = forceModuleName;
+                this.addModuleVarName(id);
+            }
+            else
+            {
+                let varName = path.basename(apath);
+                const dotidx = varName.lastIndexOf('.');
+                if (dotidx !== -1) varName = varName.substr(0, dotidx);
+                if (varName === 'index')
+                {
+                    varName = path.basename(path.dirname(apath));
+                }
+                this.allocModuleVarName(id, varName);
+            }
+            this.cache[apath] = id;
+            this.main.cacheJsonModified = true;
+        }
+        return id;
+    }
+
+    deleteModuleId(apath:string):boolean
+    {
+        const id = this.cache[apath];
+        if (!id) return false;
+        delete this.cache[apath];
+        this.main.freeCacheId(id.number);
+        this.deleteModuleVarName(id.varName);
+        return true;
+    }
+
     resolvePath(filepath:string):string
     {
         return path.isAbsolute(filepath) ? path.join(filepath) : path.join(this.basedir, filepath);
@@ -487,33 +581,29 @@ export class Bundler
         return sourceFile;
     }
 
-    restoreModuleVarName(id:BundlerModuleId):BundlerModuleId|null
+    addModuleVarName(module:BundlerModuleId):BundlerModuleId|null
     {
-        const oldid = this.names.get(id.varName);
-        if (oldid !== undefined)
-        {
-            return oldid;
-        }
-        this.names.set(id.varName, id);
-        return null;
+        const old = this.names.get(module.varName);
+        this.names.set(module.varName, module);
+        return old || null;
     }
 
-    allocModuleVarName(id:BundlerModuleId, name:string):string
+    allocModuleVarName(module:BundlerModuleId, name:string):void
     {
         name = identifierValidating(name);
         if (this.names.has(name))
         {
-          const base = name;
-          let num = 2;
-          for (;;)
-          {
-            name = base + num;
-            if (!this.names.has(name)) break;
-            num++;
-          }
+            const base = name;
+            let num = 2;
+            for (;;)
+            {
+                name = base + num;
+                if (!this.names.has(name)) break;
+                num++;
+            }
         }
-        this.names.set(name, id);
-        return name;
+        this.names.set(name, module);
+        module.varName = name;
     }
 
     deleteModuleVarName(name:string):boolean
@@ -571,10 +661,9 @@ export class Bundler
         this.mapgen = new sourceMap.SourceMapGenerator({
             file:'./'+path.basename(this.output)
         });
-        
-        this.entryModule = null;
-        this.modules.clear(); // must not clear at end, it's accessed by the watcher
-        
+            
+        this.deplist.length = 0;
+        if (this.tsconfig !== null) this.deplist.push(this.tsconfig);
         const filename = path.basename(this.entryApath);
         const mpath = filename.substr(0, filename.length - getScriptKind(filename).ext.length);
 
@@ -587,13 +676,16 @@ export class Bundler
 
         let writer:FileWriter|null = null;
 
-        this.entryModule = this.getModule(null, true, './'+mpath, this.entryApath);
-        this.entryModule.isAppended = true;
+        const entryModule = this.getModule('./'+mpath, this.entryApath, '__entry');
+        entryModule.isEntry = true;
+        entryModule.isAppended = true;
+        this.deplist.push(this.entryApath);
+        
         let refined:RefinedModule|null = null;
         this.taskQueue.run(async()=>{
             try
             {
-                refined = await this.entryModule!.append();
+                refined = await entryModule.append();
                 if (refined === null) return;
                 await fsp.mkdirRecursive(this.outdir);
         
@@ -644,17 +736,14 @@ export class Bundler
         });
         await this.taskQueue.onceEnd();
 
-        if (this.preimport.size !== 0)
+        for (const apath in this.cache)
         {
-            await writer!.write(`__m:{\n`);
-            for (const [varname, mpath] of this.preimport.entries())
-            {
-                await writer!.write(`    ${varname}:require('${mpath}'),\n`);
-                this.lineOffset ++;
-            }
-            await writer!.write(`},\n`);
+            const module = this.cache[apath];
+            if (module.number !== ExternalMode.Preimport) continue;
+            await writer!.write(`${module.varName}:require('${apath}'),\n`);
+            this.lineOffset ++;
         }
-        if (this.useDirNameResolver)
+        if ('__resolve' in this.cache)
         {
             if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
             {
@@ -664,7 +753,8 @@ export class Bundler
             {
                 await writer!.write(`__resolve:function(rpath){\n`);
             }
-            await writer!.write(`return this.__m.${this.getPreimportVarName('path')}.join(this.__dirname, rpath)\n},\n`);
+            const path = this.cache.path;
+            await writer!.write(`return this.${path.varName}.join(this.__dirname, rpath);\n},\n`);
             if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
             {
                 await writer!.write(`__dirname,\n`);
@@ -687,9 +777,9 @@ export class Bundler
             this.lineOffset ++;
         }
         if (this.verbose) console.log(this.entryRpath+': starting');
-        await this.write(this.entryModule, refined!);
+        await this.write(entryModule, refined!);
         if (this.verbose) console.log(this.entryRpath+': writing end');
-        memoryCache.release(refined!.id.number, refined!);
+        memoryCache.put(refined!.id.number, refined!);
 
         await Promise.all([(async()=>{
             await writer!.write('\n');
@@ -719,68 +809,65 @@ export class Bundler
             await writer!.end();
         })(), fsp.writeFile(this.output+'.map', this.mapgen!.toString())]);
 
-        this.main.clearCache(this, this.modules);
+        this.main.clearCache(this, this.moduleByName);
 
         if (this.verbose) console.log(this.entryRpath+': done');
         this.mapgen = null;
         this.lineOffset = 0;
         this.writingProm = null;
+        this.moduleByName.clear();
         this.sourceFileCache.clear();
         
-        function checkModuleDep(parent:BundlerModule):boolean
+        const parents:BundlerModule[] = [];
+        function checkModuleDep(m:BundlerModule, i:number):void
         {
-            if (parent.checkState === CheckState.Checked) return false;
-            if (parent.checkState === CheckState.Entered) return true;
+            if (m.checkState === CheckState.Checked) return;
+            if (m.checkState === CheckState.Entered)
+            {
+                const parent = parents[parents.length-1];
+                const loopPoint = parents.lastIndexOf(m);
+                const looping = parents.slice(loopPoint);
+                looping.push(m);
+                parent.error(parent.importLines![i], 1005, 'Circular dependency '+looping.map(m=>colors.yellow(m.rpath)).join(' → '));
+                return;
+            }
+            m.checkState = CheckState.Entered;
+            parents.push(m);
 
-            const n = parent.children.length;
+            const n = m.children.length;
             for (let i=0;i<n;i++)
             {
-                const child = parent.children[i];
-                if (checkModuleDep(child))
-                {
-                    const parents = child.getParents();
-                    parents.reverse();
-                    parents.push(child);
-                    child.error(child.importLines![i], 1005, 'Circular dependency '+parents.map(m=>colors.yellow(m.rpath)).join(' → '));
-                }
+                checkModuleDep(m.children[i], i);
             }
-            parent.checkState = CheckState.Checked;
-            return false;
+            m.checkState = CheckState.Checked;
+            parents.pop();
         }   
 
         if (this.checkCircularDependency)
         {
-            checkModuleDep(this.entryModule!);
+            checkModuleDep(entryModule, -1);
         }
-
-        // const sourceMapContent = await fsp.readFile(this.output+'.map', 'utf-8');
-        // const content = await fsp.readFile(this.output, 'utf-8');
-        // const validate = await import('sourcemap-validator');
-        // const modules:Record<string, string> = {};
-        // for (const module of this.modules.values())
-        // {
-        //     const rpath = path.relative(this.outdir, module.id.apath).replace(/\\/g, '/');
-        //     modules[rpath] = await fsp.readFile(module.id.apath, 'utf-8');
-        // }
-        // validate(content, sourceMapContent, modules);
 
         return true;
     }
 
-    getModule(parent:BundlerModule|null, isEntry:boolean, mpath:string, apath:string):BundlerModule
+    getExternal(name:string, mode:ExternalMode):BundlerModuleId
     {
-        let module = this.modules.get(apath);
-        if (module) return module;
-        
-        module = new BundlerModule(this, parent, isEntry, mpath, apath);
-        this.modules.set(apath, module);
-        return module;
+        if (name.startsWith('.'))
+        {
+            this.main.reportMessage(IfTsbError.InternalError, `${name}: external module starts with dot`);
+        }
+        return this.getModuleId(name, mode, null);
     }
 
-    getPreimportVarName(mpath:string):string {
-        const varname = identifierValidating(mpath);
-        this.preimport.set(mpath, mpath);
-        return varname;
+    getModule(mpath:string, apath:string, forceModuleName?:string):BundlerModule
+    {
+        let module = this.moduleByName.get(apath);
+        if (module) return module;
+        
+        module = new BundlerModule(this, mpath, apath, forceModuleName || null);
+        this.moduleByName.set(apath, module);
+        return module;
     }
 }
 
@@ -789,18 +876,18 @@ export class BundlerModule
     public readonly id:BundlerModuleId;
     public readonly rpath:string;
     public readonly children:BundlerModule[] = [];
-    public importLines:(ErrorPosition|null)[]|null = null;
+    public readonly importLines:(ErrorPosition|null)[] = [];
     public isAppended = false;
+    public isEntry = false;
     public checkState = CheckState.None;
 
     constructor(
         public readonly bundler:Bundler, 
-        public readonly parent:BundlerModule|null,
-        public readonly isEntry:boolean,
         public readonly mpath:string,
-        apath:string)
+        apath:string,
+        forceModuleName:string|null)
     {
-        this.id = bundler.main.getModuleId(bundler, apath, isEntry);
+        this.id = bundler.getModuleId(apath, ExternalMode.NoExternal, forceModuleName);
         this.rpath = path.relative(bundler.basedir, apath);
     }
 
@@ -846,22 +933,16 @@ export class BundlerModule
         return this.error(this.makeErrorPosition(node), code, message);
     }
 
-    getParents():BundlerModule[]
-    {
-        const out:BundlerModule[] = [this];
-
-        let node = this.parent;
-        while (node !== null)
-        {
-            out.push(node);
-            node = node.parent;
-        }
-        return out;
-    }
-
     private async _refine():Promise<RefinedModule|null>
     {
-        const refined = new RefinedModule(this.id, Date.now());
+        let refined = await RefinedModule.getRefined(this.id, this.bundler.tsconfigMtime);
+        if (refined !== null) return refined;
+
+        this.children.length = 0;
+        this.importLines.length = 0;
+
+        refined = new RefinedModule(this.id, Date.now());
+        refined.content = `// ${this.rpath}\n`;
 
         let doNotSave = false;
         let useDirName = false;
@@ -871,39 +952,40 @@ export class BundlerModule
         const bundler = this.bundler;
         const basedir = bundler.basedir;
 
-        const importPaths:string[] = [];
-        const importModulePathes:string[] = [];
-        const importLines:(ErrorPosition|null)[] = [];
-        refined.importPathes = importPaths;
-        refined.importModulePathes = importModulePathes;
-        refined.importLines = this.importLines = importLines;
-        refined.content = `// ${this.rpath}\n`;
+        const addExternalList = (name:string, mode:ExternalMode, codepos:ErrorPosition|null)=>{
+            const childModule = bundler.getExternal(name, mode);
+            refined!.imports.push(new ImportInfo((-mode)+'', name, codepos));
+            return childModule;
+        };
 
+        const addToImportList = (mpath:string, apath:string, codepos:ErrorPosition|null, forceModuleName?:string)=>{
+            const childModule = bundler.getModule(mpath, apath, forceModuleName);
+            refined!.imports.push(new ImportInfo(childModule.id.apath, mpath, codepos));
+            return childModule;
+        };
 
         const factory = (ctx:ts.TransformationContext)=>{
             const stacks:ts.Node[] = [];
 
-            const preimport = (importName:string)=>{
-                const varname = bundler.getPreimportVarName(importName);
+            const preimport = (mpath:string)=>{
+                const module = addExternalList(mpath, ExternalMode.Preimport, getErrorPosition());
                 return ctx.factory.createPropertyAccessExpression(
-                    ctx.factory.createPropertyAccessExpression(
-                        ctx.factory.createIdentifier(this.bundler.globalVarName),
-                        ctx.factory.createIdentifier('__m')),
-                        ctx.factory.createIdentifier(varname));
+                    ctx.factory.createIdentifier(this.bundler.globalVarName),
+                    ctx.factory.createIdentifier(module.varName));
             };
 
             const getErrorPosition = ():ErrorPosition|null=>{
                 for (let i = stacks.length-1; i >= 0; i--)
                 {
                     let node = stacks[i];
-                    const ori  =(node as any).original;
+                    const ori = (node as any).original;
                     if (ori) node = ori;
                     if (node.pos === -1) continue;
                     return this.makeErrorPosition(node);
                 }
                 return this.makeErrorPosition(sourceFile);
             };
-
+    
             const importFromStringLiteral = (_node:ts.Node, base:ts.Node):ts.Node=>{
                 if (_node.kind !== ts.SyntaxKind.StringLiteral)
                 {
@@ -925,18 +1007,18 @@ export class BundlerModule
                     }
                 }, oldsys);
 
-                const mpath = joinModulePath(this.mpath, importName);
-                if (mpath === 'path')
+                const childModuleMpath = joinModulePath(this.mpath, importName);
+                if (childModuleMpath === 'path')
                 {
                     return preimport('path');
                 }
-                // if (bundler.preimportTargets.has(mpath))
-                // {
-                //     return preimport(mpath);
-                // }
+                if (bundler.preimportTargets.has(childModuleMpath))
+                {
+                    return preimport(childModuleMpath);
+                }
                 for (const glob of bundler.externals)
                 {
-                    if (glob.test(mpath)) return base;
+                    if (glob.test(childModuleMpath)) return base;
                 }
 
                 let module = ts.nodeModuleNameResolver(importName, this.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
@@ -945,12 +1027,12 @@ export class BundlerModule
                 const info = module.resolvedModule;
                 if (!info)
                 {
-                    if (!mpath.startsWith('.'))
+                    if (!childModuleMpath.startsWith('.'))
                     {
-                        // if (builtin.has(mpath))
-                        // {
-                        //     return preimport(mpath);
-                        // }
+                        if (builtin.has(childModuleMpath))
+                        {
+                            return preimport(childModuleMpath);
+                        }
                         if (!this.bundler.bundleExternals) return base;
                     }
                     doNotSave = true;
@@ -963,12 +1045,12 @@ export class BundlerModule
                     if (!this.bundler.bundleExternals) return base;
                 }
                 
-                let filepath = path.isAbsolute(info.resolvedFileName) ? path.join(info.resolvedFileName) : path.join(bundler.basedir, info.resolvedFileName);
-                const kind = getScriptKind(filepath);
+                let childmoduleApath = path.isAbsolute(info.resolvedFileName) ? path.join(info.resolvedFileName) : path.join(bundler.basedir, info.resolvedFileName);
+                const kind = getScriptKind(childmoduleApath);
                 if (kind.kind === ts.ScriptKind.External)
                 {
-                    filepath = filepath.substr(0, filepath.length-kind.ext.length+1)+'js';
-                    if (!fs.existsSync(filepath))
+                    childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
+                    if (!fs.existsSync(childmoduleApath))
                     {
                         doNotSave = true;
                         this.error(getErrorPosition(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
@@ -976,25 +1058,14 @@ export class BundlerModule
                     }
                 }
     
-                const childModule = bundler.getModule(this, false, mpath, filepath);
-                importPaths.push(filepath);
-                importModulePathes.push(mpath);
-                importLines.push(getErrorPosition());
-                this.children.push(childModule);
+                const childModule = addToImportList(childModuleMpath, childmoduleApath, getErrorPosition());
+                const moduleVar = ctx.factory.createPropertyAccessExpression(
+                    ctx.factory.createIdentifier(this.bundler.globalVarName),
+                    ctx.factory.createIdentifier(childModule.id.varName));
 
-                if (childModule.isEntry)
-                {
-                    bundler.entryModuleIsAccessed = true;
-                    return ctx.factory.createPropertyAccessExpression(
-                        ctx.factory.createIdentifier(this.bundler.globalVarName),
-                        ctx.factory.createIdentifier(childModule.id.varName));
-                }
-        
+                if (childModule.isEntry) return moduleVar;
                 return ctx.factory.createCallExpression(
-                    ctx.factory.createPropertyAccessExpression(
-                        ctx.factory.createIdentifier(this.bundler.globalVarName), 
-                        ctx.factory.createIdentifier(childModule.id.varName)), 
-                    [], []);
+                    moduleVar, [], []);
             };
     
             const visit = (_node:ts.Node):ts.Node=>{
@@ -1039,7 +1110,7 @@ export class BundlerModule
                         if (node.arguments.length !== 1)
                         {
                             doNotSave = true;
-                            this.error(getErrorPosition(), 1005, `Cannot call import with multiple parameters`);
+                            this.error(getErrorPosition(), IfTsbError.Unsupported, `Cannot call import with multiple parameters`);
                             return _node;
                         }
                         return importFromStringLiteral(node.arguments[0], _node);
@@ -1058,6 +1129,7 @@ export class BundlerModule
                 stacks.pop();
                 return ret;
             };
+            
             return (sourceFile:ts.SourceFile)=>ts.visitNode(sourceFile, visit);
         };
 
@@ -1071,7 +1143,7 @@ export class BundlerModule
         }
         catch (err)
         {
-            this.bundler.main.reportMessage(6053, err.message+' '+filepath);
+            this.bundler.main.reportMessage(IfTsbError.ModuleNotFound, err.message+' '+filepath);
             return null;
         }
         
@@ -1180,7 +1252,7 @@ export class BundlerModule
                     diagnostics = [...program.getSyntacticDiagnostics(sourceFile)];
                     this.bundler.main.reportFromDiagnostics(diagnostics);
                 }
-                this.bundler.main.reportMessage(6053, `Failed to parse ${filepath}`);
+                this.bundler.main.reportMessage(IfTsbError.Unsupported, `Failed to parse ${filepath}`);
                 return null;
             }
             
@@ -1269,16 +1341,18 @@ export class BundlerModule
                 {
                     if (path.sep !== '/') rpath = rpath.split(path.sep).join('/');
                     refined.content += `${prefix}__filename=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
-                    bundler.getPreimportVarName('path');
-                    bundler.useDirNameResolver = true;
+                    addExternalList('path', ExternalMode.Preimport, null);
+                    addExternalList('__resolve', ExternalMode.Manual, null);
+                    addExternalList('__dirname', ExternalMode.Manual, null);
                 }
                 if (useDirName)
                 {
                     rpath = path.dirname(rpath);
                     if (path.sep !== '/') rpath = rpath.split(path.sep).join('/');
                     refined.content += `${prefix}__dirname=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
-                    bundler.getPreimportVarName('path');
-                    bundler.useDirNameResolver = true;
+                    addExternalList('path', ExternalMode.Preimport, null);
+                    addExternalList('__resolve', ExternalMode.Manual, null);
+                    addExternalList('__dirname', ExternalMode.Manual, null);
                 }
             }
             refined.content += stripper.strippedComments;
@@ -1325,54 +1399,76 @@ export class BundlerModule
 
     async append():Promise<RefinedModule|null>
     {
-        let refined = await RefinedModule.loadCacheIfNotModified(this.id, this.bundler.tsconfigMtime);
-        if (refined === null)
-        {
-            refined = await this._refine();
-            if (refined === null) return null;
-        }
+        const refined = await this._refine();
+        if (refined === null) return null;
 
         const bundler = this.bundler;
-        const n = refined.importPathes.length;
-        if (n !== this.children.length)
+        if (this.children.length === 0)
         {
-            this.children.length = n;
-            for (let i=0;i<n;i++)
+            this.importLines.length = 0;
+
+            for (const info of refined.imports)
             {
-                this.children[i] = bundler.getModule(this, false, refined.importModulePathes[i], refined.importPathes[i]);
+                const mode = info.getExternalMode();
+                if (mode !== null)
+                {
+                    bundler.getExternal(info.mpath, mode);
+                }
+                else
+                {
+                    const childModule = bundler.getModule(info.mpath, info.apath);
+                    this.children.push(childModule);
+                    this.importLines.push(info.codepos);
+                }
             }
-            this.importLines = refined.importLines;
         }
-        for (let i=0;i<n;i++)
+        
+        for (const module of this.children)
         {
-            const module = this.children[i];
+            if (module.isEntry)
+            {
+                bundler.entryModuleIsAccessed = true;
+                continue;
+            }
             if (module.isAppended) continue;
+            bundler.deplist.push(module.id.apath);
             module.isAppended = true;
-            bundler.taskQueue.run(async()=>{
+            if (this.bundler.verbose)
+            {
+                console.log('Task - '+'*'.repeat(bundler.taskQueue.getTaskCount()));
+            }
+            await bundler.taskQueue.run(async()=>{
                 const refined = await module.append();
                 if (refined === null) return;
                 await bundler.write(module, refined);
-                memoryCache.release(refined.id.number, refined);
+                memoryCache.put(refined.id.number, refined);
+                if (this.bundler.verbose)
+                {
+                    console.log('Task - '+'*'.repeat(bundler.taskQueue.getTaskCount()-1));
+                }
             });
         }
         return refined;
     }
 }
 
-export interface BundlerModuleId
+export class BundlerModuleId
 {
-    number:number;
-    varName:string;
-    apath:string;
+    constructor(
+        public readonly number:number,
+        public varName:string,
+        public readonly apath:string)
+    {
+    }
 }
 
 export class BundlerMainContext
 {
     public errorCount = 0;
-    private readonly cache:Record<string, Record<string,BundlerModuleId>>;
+    private readonly cache:Record<string, Record<string, BundlerModuleId>>;
     private readonly cacheUnusingId:number[] = [];
-    private cahceIdCounter = -1;
-    private cacheJsonModified = false;
+    private lastCacheId = -1;
+    public cacheJsonModified = false;
     private readonly outputs = new Set<string>();
 
     constructor()
@@ -1389,10 +1485,12 @@ export class BundlerMainContext
                 const cache = this.cache[entryApath];
                 for (const apath in cache)
                 {
-                    count++;
                     const id = cache[apath];
-                    id.apath = apath;
-                    using.add(id.number);
+                    cache[apath] = new BundlerModuleId(id.number, id.varName, apath);
+                    if (id.number >= 0) {
+                        count++;
+                        using.add(id.number);
+                    }
                 }
             }
             for (let i=0; count !== 0; i++)
@@ -1400,17 +1498,16 @@ export class BundlerMainContext
                 if (using.has(i))
                 {
                     count--;
-                    this.cahceIdCounter = i;
+                    this.lastCacheId = i;
                     continue;
                 }
                 this.cacheUnusingId.push(i);
             }
-            this.cahceIdCounter ++;
         }
         catch (err)
         {
             this.cache = {};
-            this.cahceIdCounter = 0;
+            this.lastCacheId = -1;
         }
     }
 
@@ -1474,7 +1571,7 @@ export class BundlerMainContext
     {
         if (err.code === 'ENOENT')
         {
-            this.reportMessage(6053, err.message);
+            this.reportMessage(IfTsbError.ModuleNotFound, err.message);
             return true;
         }
         this.errorCount++;
@@ -1492,12 +1589,14 @@ export class BundlerMainContext
 
     private _removeCache(bundler:Bundler, cache:Record<string, BundlerModuleId>, id:BundlerModuleId):void
     {
-        delete cache[id.apath];
-        this.cacheUnusingId.push(id.number);
         bundler.deleteModuleVarName(id.varName);
+        if (id.number < 0) return;
+        this.freeCacheId(id.number);
+        delete cache[id.apath];
         this.cacheJsonModified = true;
+
         namelock.lock(id.number);
-        function unlock(){ namelock.unlock(id.number); }
+        function unlock(){ namelock.unlock((id as BundlerModuleId).number); }
         fsp.unlink(getCacheFilePath(id)).then(unlock, unlock);
     }
 
@@ -1514,50 +1613,47 @@ export class BundlerMainContext
         }
     }
 
-    getModuleId(bundler:Bundler, apath:string, isEntry:boolean):BundlerModuleId
+
+    allocateCacheId():number
     {
-        let map = this.cache[bundler.entryApath];
-        if (!map) this.cache[bundler.entryApath] = map = {};
-
-        let id = map[apath];
-        if (id === undefined)
+        if (this.cacheUnusingId.length === 0)
         {
-            let number:number;
-            if (this.cacheUnusingId.length === 0)
-            {
-                number = this.cahceIdCounter++;
-            }
-            else
-            {
-                number = this.cacheUnusingId.pop()!;
-            }
-            
-
-            id = {
-                number: number,
-                apath,
-                varName: ''
-            };
-            if (isEntry)
-            {
-                id.varName = '__entry';
-                bundler.restoreModuleVarName(id);
-            }
-            else
-            {
-                let varName = path.basename(apath);
-                const dotidx = varName.lastIndexOf('.');
-                if (dotidx !== -1) varName = varName.substr(0, dotidx);
-                if (varName === 'index')
-                {
-                    varName = path.basename(path.dirname(apath));
-                }
-                id.varName = bundler.allocModuleVarName(id, varName)
-            }
-            map[apath] = id;
-            this.cacheJsonModified = true;
+            return ++this.lastCacheId;
         }
-        return id;
+        else
+        {
+            return this.cacheUnusingId.pop()!;
+        }
+    }
+
+    freeCacheId(id:number):void
+    {
+        if (id < 0) return;
+        if (id === this.lastCacheId)
+        {
+            --this.lastCacheId;
+
+            for (;;)
+            {
+                const idx = this.cacheUnusingId.lastIndexOf(this.lastCacheId);
+                if (idx === -1) return;
+                this.lastCacheId--;
+                const last = this.cacheUnusingId.pop()!;
+                if (last === this.lastCacheId) continue;
+                this.cacheUnusingId[idx] = last;
+            }
+        }
+        else
+        {
+            this.cacheUnusingId.push(id);
+        }
+    }
+
+    getCacheMap(apath:string):Record<string,BundlerModuleId>
+    {
+        const map = this.cache[apath];
+        if (map) return map;
+        return this.cache[apath] = {};
     }
 
     private _makeBundlers(options:TsConfig, basedir:string, tsconfig:string|null, compilerOptions:ts.CompilerOptions):Bundler[]
@@ -1609,7 +1705,7 @@ export class BundlerMainContext
             const resolvedOutput = path.resolve(basedir, output);
             if (this.outputs.has(resolvedOutput))
             {
-                this.reportMessage(6053, `outputs are dupplicated. ${output}`);
+                this.reportMessage(IfTsbError.Dupplicated, `outputs are dupplicated. ${output}`);
                 continue;
             }
             try
@@ -1620,7 +1716,7 @@ export class BundlerMainContext
                 for (const apath in cache)
                 {
                     const moduleId = cache[apath];
-                    const oldid = bundler.restoreModuleVarName(moduleId);
+                    const oldid = bundler.addModuleVarName(moduleId);
                     if (oldid !== null)
                     {
                         this._removeCache(bundler, cache, oldid);
@@ -1802,8 +1898,7 @@ export function bundleWatch(entries:string[], output?:string):void
                     {
                         ctx.reportFromCatch(err);
                     }
-                    const files = [...bundler.modules.keys()];
-                    if (bundler.tsconfig !== null) files.push(bundler.tsconfig);
+                    const files = bundler.deplist;
                     watcher.reset(bundler, files);
                 }
 
@@ -1819,8 +1914,7 @@ export function bundleWatch(entries:string[], output?:string):void
                         {
                             ctx.reportFromCatch(err);
                         }
-                        const files = [...bundler.modules.keys()];
-                        if (bundler.tsconfig !== null) files.push(bundler.tsconfig);
+                        const files = bundler.deplist;
                         watcher.reset(bundler, files);
                     }
                 }

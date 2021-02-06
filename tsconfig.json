@@ -3,7 +3,9 @@
         "./src/cli.ts": "./cli.bundle.js",
         "./src/index.ts": "./index.bundle.js"
     },
-    "verbose": true,
+    "bundlerOptions": {
+        "verbose": true
+    },
     "compilerOptions": {
         "target": "ES2015",
         "lib": [ "ES2015" ],
@@ -16,6 +18,7 @@
         "resolveJsonModule": true,
         "declaration": true,
         "sourceMap": true,
+        "importHelpers": true,
         "paths": {
           "bdsx/*": ["./bdsx/*"]
        }
