@@ -12,7 +12,7 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "node_modules/ts-node/dist/bin.js",
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", "."],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
@@ -26,7 +26,7 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "node_modules/ts-node/dist/bin.js",
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\bdsx", "-w", "--clear-cache"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
@@ -40,7 +40,7 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "node_modules/ts-node/dist/bin.js",
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\old\\bdsx", "-w", "--clear-cache"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
@@ -54,7 +54,7 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "node_modules/ts-node/dist/bin.js",
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\js\\vscode-closure-compiler", "-w", "--clear-cache"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
@@ -68,7 +68,7 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "node_modules/ts-node/dist/bin.js",
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\js\\redprint", "-w", "--clear-cache"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
