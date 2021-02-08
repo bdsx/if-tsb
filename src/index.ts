@@ -4,7 +4,6 @@ if (!Date.now) Date.now = ()=>+new Date();
 import ts = require('typescript');
 import fs = require('fs');
 import path = require('path');
-import sourceMap = require('source-map');
 import { identifierValidating } from './checkvar';
 import { ErrorPosition } from './errpos';
 import { findCacheDir } from './findcachedir';
@@ -12,6 +11,7 @@ import { fsp, mkdirRecursiveSync } from './fsp';
 import { LineStripper } from './linestripper';
 import { MemoryManager } from './memmgr';
 import { namelock } from './namelock';
+import { SourceMap } from './sourcemap';
 import { WriterStream as FileWriter } from './streamwriter';
 import { changeExt, ConcurrencyQueue, count, defaultFormatHost, getScriptKind, joinModulePath, parsePostfix, resolved, SkipableTaskQueue, splitContent, time } from './util';
 import { FilesWatcher } from './watch';
@@ -21,7 +21,8 @@ import globToRegExp = require('glob-to-regexp');
 const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
-const CACHE_SIGNATURE = '\nTSBC-0.8';
+const CACHE_VERSION = 'TSBC-0.8';
+const CACHE_SIGNATURE = '\n'+CACHE_VERSION;
 const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
 const memoryCache = new MemoryManager<RefinedModule>(CACHE_MEMORY_DEFAULT);
 const defaultCompilerOptions = ts.getDefaultCompilerOptions();
@@ -98,6 +99,7 @@ export interface BundlerOptions
     cacheMemory?:number|string;
     module?:string;
     preimport?:string[];
+    concurrency?:number;
 }
 
 export interface BundlerOptionsWithOutput extends BundlerOptions
@@ -294,7 +296,7 @@ export class Bundler
     private readonly names = new Map<string, BundlerModuleId>();
 
     private writingProm:Promise<FileWriter>|null = null;
-    private mapgen:sourceMap.SourceMapGenerator|null = null;
+    private mapgen:SourceMap|null = null;
     private lineOffset = 0;
     public entryModuleIsAccessed = false;
 
@@ -318,7 +320,7 @@ export class Bundler
     private readonly moduleByName = new Map<string, BundlerModule>();
     public readonly deplist:string[] = [];
     public readonly files:string[] = [];
-    public readonly taskQueue = new ConcurrencyQueue;
+    public readonly taskQueue:ConcurrencyQueue;
     private readonly sourceFileCache = new Map<string, ts.SourceFile>();
     public readonly tsconfigMtime:number;
     public readonly moduleResolutionCache:ts.ModuleResolutionCache;
@@ -407,16 +409,17 @@ export class Bundler
         this.outdir = path.dirname(this.output);
         const boptions = options.bundlerOptions || {};
 
-        this.globalVarName = boptions.globalModuleVarName || '__tsb';
-        this.clearConsole = boptions.clearConsole || false;
-        this.verbose = boptions.verbose || false;
-        this.checkCircularDependency = boptions.checkCircularDependency || false;
-        this.suppressDynamicImportErrors = boptions.suppressDynamicImportErrors || false;
-        this.faster = boptions.faster || false;
+        this.taskQueue = new ConcurrencyQueue(Number(boptions.concurrency) || undefined);
+        this.globalVarName = (boptions.globalModuleVarName || '__tsb').toString();
+        this.clearConsole = boptions.clearConsole === true;
+        this.taskQueue.verbose = this.verbose = boptions.verbose === true;
+        this.checkCircularDependency = boptions.checkCircularDependency === true;
+        this.suppressDynamicImportErrors = boptions.suppressDynamicImportErrors === true;
+        this.faster = boptions.faster === true;
         this.watchWaiting = boptions.watchWaiting;
-        this.bundleExternals = boptions.bundleExternals || false;
-        this.externals = boptions.externals ? boptions.externals.map(glob=>globToRegExp(glob)) : [];
-        this.preimportTargets = new Set(boptions.preimport);
+        this.bundleExternals = boptions.bundleExternals === true;
+        this.externals = boptions.externals instanceof Array ? boptions.externals.map(glob=>globToRegExp(glob)) : [];
+        this.preimportTargets = boptions.preimport instanceof Array ? new Set(boptions.preimport) : new Set;
         this.preimportTargets.add('tslib');
 
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
@@ -426,7 +429,7 @@ export class Bundler
         }
         else
         {
-            const exportRule = boptions.module.toLowerCase();
+            const exportRule = (boptions.module+'').toLowerCase();
             switch (exportRule)
             {
             case 'none': this.exportRule = ExportRule.None; break;
@@ -613,14 +616,15 @@ export class Bundler
     
     async write(module:BundlerModule, refined:RefinedModule):Promise<void>
     {
-        if (this.verbose) console.log(refined.id.apath+': writing');
         const writer = await this._lock();
+        if (this.verbose) console.log(refined.id.apath+': writing');
         try
         {
             await writer.write(refined.content);
         }
         finally
         {
+            if (this.verbose) console.log(refined.id.apath+': writing end');
             this._unlock();
         }
         const offset = this.lineOffset + refined.sourceMapOutputLineOffset;
@@ -630,23 +634,7 @@ export class Bundler
         {
             try
             {
-                let rpath = path.relative(this.outdir, refined.id.apath).replace(/\\/g, '/');
-                // if (!path.isAbsolute(rpath) && !rpath.startsWith('.')) rpath = './'+rpath;
-                const consumer = new sourceMap.SourceMapConsumer(JSON.parse(refined.sourceMapText));
-                consumer.eachMapping(entry=>{
-                  this.mapgen!.addMapping({
-                    generated:{
-                      column: entry.generatedColumn,
-                      line: entry.generatedLine + offset,
-                    },
-                    original:{
-                      column: entry.originalColumn,
-                      line: entry.originalLine,
-                    },
-                    name: entry.name,
-                    source: rpath
-                  });
-                });
+                this.mapgen!.append(refined.id.apath, refined.sourceMapText, offset);
             }
             catch (err)
             {
@@ -655,12 +643,53 @@ export class Bundler
         }
     }
         
+    private async _appendChildren(module:BundlerModule, refined:RefinedModule):Promise<void>
+    {
+        if (module.children.length === 0)
+        {
+            module.importLines.length = 0;
+
+            for (const info of refined.imports)
+            {
+                const mode = info.getExternalMode();
+                if (mode !== null)
+                {
+                    this.getExternal(info.mpath, mode);
+                }
+                else
+                {
+                    const childModule = this.getModule(info.mpath, info.apath);
+                    module.children.push(childModule);
+                    module.importLines.push(info.codepos);
+                }
+            }
+        }
+        
+        for (const child of module.children)
+        {
+            if (child.isEntry)
+            {
+                this.entryModuleIsAccessed = true;
+                continue;
+            }
+            if (child.isAppended) continue;
+            this.deplist.push(child.id.apath);
+            child.isAppended = true;
+            await this.taskQueue.run(async()=>{
+                const childRefined = await child.refine();
+                if (childRefined === null) return;
+                this._appendChildren(child, childRefined);
+
+                await this.write(child, childRefined);
+                memoryCache.put(childRefined.id.number, childRefined);
+            });
+        }
+    }
+
     async bundle():Promise<boolean>
     {
         if (this.writingProm !== null) throw Error('bundler is busy');
-        this.mapgen = new sourceMap.SourceMapGenerator({
-            file:'./'+path.basename(this.output)
-        });
+        this.mapgen = SourceMap.newInstance(this.output);
             
         this.deplist.length = 0;
         if (this.tsconfig !== null) this.deplist.push(this.tsconfig);
@@ -681,21 +710,22 @@ export class Bundler
         entryModule.isAppended = true;
         this.deplist.push(this.entryApath);
         
-        let refined:RefinedModule|null = null;
+        let entryRefined:RefinedModule|null = null;
         this.taskQueue.run(async()=>{
             try
             {
-                refined = await entryModule.append();
-                if (refined === null) return;
+                entryRefined = await entryModule.refine();
+                if (entryRefined === null) return;
+                this._appendChildren(entryModule, entryRefined);
                 await fsp.mkdirRecursive(this.outdir);
         
                 await this._lockWithoutWriter();
                 try
                 {
                     writer = new FileWriter(this.output);
-                    if (refined.firstLineComment !== null)
+                    if (entryRefined.firstLineComment !== null)
                     {
-                        await writer.write(refined.firstLineComment+'\n');
+                        await writer.write(entryRefined.firstLineComment+'\n');
                         this.lineOffset++;
                     }
                     if (this.tsoptions.alwaysStrict)
@@ -735,6 +765,7 @@ export class Bundler
             }
         });
         await this.taskQueue.onceEnd();
+        if (writer === null) return false; // writer is null if the build is failed.
 
         for (const apath in this.cache)
         {
@@ -777,9 +808,9 @@ export class Bundler
             this.lineOffset ++;
         }
         if (this.verbose) console.log(this.entryRpath+': starting');
-        await this.write(entryModule, refined!);
+        await this.write(entryModule, entryRefined!);
         if (this.verbose) console.log(this.entryRpath+': writing end');
-        memoryCache.put(refined!.id.number, refined!);
+        memoryCache.put(entryRefined!.id.number, entryRefined!);
 
         await Promise.all([(async()=>{
             await writer!.write('\n');
@@ -807,7 +838,7 @@ export class Bundler
             }
             await writer!.write(`//# sourceMappingURL=${path.basename(this.output)}.map`);
             await writer!.end();
-        })(), fsp.writeFile(this.output+'.map', this.mapgen!.toString())]);
+        })(), this.mapgen.save()]);
 
         this.main.clearCache(this, this.moduleByName);
 
@@ -933,7 +964,7 @@ export class BundlerModule
         return this.error(this.makeErrorPosition(node), code, message);
     }
 
-    private async _refine():Promise<RefinedModule|null>
+    async refine():Promise<RefinedModule|null>
     {
         let refined = await RefinedModule.getRefined(this.id, this.bundler.tsconfigMtime);
         if (refined !== null) return refined;
@@ -1396,60 +1427,6 @@ export class BundlerModule
         if (!doNotSave) refined.save(bundler);
         return refined;
     }
-
-    async append():Promise<RefinedModule|null>
-    {
-        const refined = await this._refine();
-        if (refined === null) return null;
-
-        const bundler = this.bundler;
-        if (this.children.length === 0)
-        {
-            this.importLines.length = 0;
-
-            for (const info of refined.imports)
-            {
-                const mode = info.getExternalMode();
-                if (mode !== null)
-                {
-                    bundler.getExternal(info.mpath, mode);
-                }
-                else
-                {
-                    const childModule = bundler.getModule(info.mpath, info.apath);
-                    this.children.push(childModule);
-                    this.importLines.push(info.codepos);
-                }
-            }
-        }
-        
-        for (const module of this.children)
-        {
-            if (module.isEntry)
-            {
-                bundler.entryModuleIsAccessed = true;
-                continue;
-            }
-            if (module.isAppended) continue;
-            bundler.deplist.push(module.id.apath);
-            module.isAppended = true;
-            if (this.bundler.verbose)
-            {
-                console.log('Task - '+'*'.repeat(bundler.taskQueue.getTaskCount()));
-            }
-            await bundler.taskQueue.run(async()=>{
-                const refined = await module.append();
-                if (refined === null) return;
-                await bundler.write(module, refined);
-                memoryCache.put(refined.id.number, refined);
-                if (this.bundler.verbose)
-                {
-                    console.log('Task - '+'*'.repeat(bundler.taskQueue.getTaskCount()-1));
-                }
-            });
-        }
-        return refined;
-    }
 }
 
 export class BundlerModuleId
@@ -1477,7 +1454,15 @@ export class BundlerMainContext
         
         try
         {
-            this.cache = JSON.parse(fs.readFileSync(cacheMapPath, 'utf-8'));
+            const cache = JSON.parse(fs.readFileSync(cacheMapPath, 'utf-8'));;
+            if (cache.version !== CACHE_VERSION)
+            {
+                this.cache = {};
+                this.lastCacheId = -1;
+                return;
+            }
+            delete cache.version;
+            this.cache = cache;
             let count = 0;
             const using = new Set<number>();
             for (const entryApath in this.cache)
@@ -1516,7 +1501,8 @@ export class BundlerMainContext
         if (!this.cacheJsonModified) return;
         this.cacheJsonModified = false;
 
-        const output:Record<string, Record<string,BundlerModuleId>> = {};
+        const output:Record<string, any> = {};
+        output.version = CACHE_VERSION;
         for (const entrypath in this.cache)
         {
             const cache = this.cache[entrypath];

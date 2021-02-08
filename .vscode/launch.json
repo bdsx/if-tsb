@@ -8,7 +8,6 @@
             "type": "node",
             "request": "launch",
             "name": "Bundle Self",
-            "console": "integratedTerminal",
             "skipFiles": [
                 "<node_internals>/**"
             ],
@@ -22,7 +21,6 @@
             "type": "node",
             "request": "launch",
             "name": "Bundle BDSX",
-            "console": "integratedTerminal",
             "skipFiles": [
                 "<node_internals>/**"
             ],
@@ -36,7 +34,6 @@
             "type": "node",
             "request": "launch",
             "name": "Bundle BDSX old",
-            "console": "integratedTerminal",
             "skipFiles": [
                 "<node_internals>/**"
             ],
@@ -50,7 +47,6 @@
             "type": "node",
             "request": "launch",
             "name": "Bundle Closure Compiler",
-            "console": "integratedTerminal",
             "skipFiles": [
                 "<node_internals>/**"
             ],
@@ -64,7 +60,6 @@
             "type": "node",
             "request": "launch",
             "name": "Bundle Red Print",
-            "console": "integratedTerminal",
             "skipFiles": [
                 "<node_internals>/**"
             ],

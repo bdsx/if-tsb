@@ -6,7 +6,6 @@ import path = require('path');
 
 export const cpuCount = os.cpus().length;
 const concurrencyCount = Math.min(Math.max(cpuCount*2, 8), cpuCount);
-const drainThreshold = cpuCount>>1;
 
 export const resolved = Promise.resolve();
 
@@ -84,31 +83,6 @@ export function splitContent(text:string, count:number, needle:string):string[]
     return out;
 }
 
-export function concurrency<T,R>(items:T[], forEach:(item:T)=>Promise<R>):Promise<R[]>
-{
-    if (items.length <= concurrencyCount)
-    {
-        return Promise.all(items.map(forEach));
-    }
-    let itemi = 0;
-    const out:R[] = new Array(items.length);
-    function next():Promise<void>|void
-    {
-        if (itemi >= items.length) return;
-        const idx = itemi++;
-        forEach(items[idx]).then(r=>{
-            out[idx] = r;
-            next();
-        });
-    }
-    const promises = new Array(concurrencyCount);
-    for (let i=0;i<concurrencyCount;i++)
-    {
-        promises[i] = next();
-    }
-    return Promise.all(promises).then(()=>out);
-}
-
 export function instanceProxy(instance:any):void
 {
 
@@ -159,7 +133,7 @@ const EMPTY = {};
 
 export class ConcurrencyQueue
 {
-    private idles = concurrencyCount;
+    private idles:number;
     private readonly reserved:(()=>Promise<void>)[] = [];
     private endResolve:(()=>void)|null = null;
     private endReject:((err:any)=>void)|null = null;
@@ -169,17 +143,15 @@ export class ConcurrencyQueue
     private idlePromise:Promise<void>|null = null;
     private _ref = 0;
     private _error:any = EMPTY;
-    private drainResolve:(()=>void)|null = null;
-    private drainReject:((err:any)=>void)|null = null;
-    private drainPromise:Promise<void>|null = null;
+    public verbose = false;
+
+    constructor(private readonly concurrency = concurrencyCount) {
+        this.idles = this.concurrency;
+    }
 
     private readonly _next:()=>(Promise<void>|void) = ()=>{
-        if (this.drainResolve !== null && this.reserved.length < drainThreshold) {
-            this.drainResolve();
-            this.drainResolve = null;
-            this.drainReject = null;
-            this.drainPromise = null;
-        }
+        if (this.verbose) console.log('Task - '+'*'.repeat(this.getTaskCount()));
+
         if (this.reserved.length === 0)
         {
             if (this.idles === 0 && this.idleResolve !== null)
@@ -199,12 +171,16 @@ export class ConcurrencyQueue
 
     private _fireEnd():void
     {
-        if (this.endResolve !== null && this._ref === 0 && this.idles === concurrencyCount)
+        if (this._ref === 0 && this.idles === this.concurrency)
         {
-            this.endResolve();
-            this.endResolve = null;
-            this.endReject = null;
-            this.endPromise = null;
+            if (this.verbose) console.log('Task - End');
+            if (this.endResolve !== null)
+            {
+                this.endResolve();
+                this.endResolve = null;
+                this.endReject = null;
+                this.endPromise = null;
+            }
         }
     }
 
@@ -223,13 +199,7 @@ export class ConcurrencyQueue
             this.idleResolve = null;
             this.idleReject = null;
         }
-        if (this.drainReject !== null) 
-        {
-            this.drainReject(err);
-            this.drainResolve = null;
-            this.drainReject = null;
-        }
-        this.drainPromise = this.idlePromise = this.endPromise = Promise.reject(this._error);
+        this.idlePromise = this.endPromise = Promise.reject(this._error);
     }
 
     ref():void
@@ -256,7 +226,7 @@ export class ConcurrencyQueue
     onceEnd():Promise<void>
     {
         if (this.endPromise !== null) return this.endPromise;
-        if (this.idles === concurrencyCount) return Promise.resolve();
+        if (this.idles === this.concurrency) return Promise.resolve();
         return this.endPromise = new Promise((resolve, reject)=>{
             this.endResolve = resolve;
             this.endReject = reject;
@@ -267,12 +237,11 @@ export class ConcurrencyQueue
     {
         this.reserved.push(task);
         if (this.idles === 0) {
-            if (this.reserved.length > drainThreshold) {
-                if (this.drainPromise !== null) return this.drainPromise;
-                return this.drainPromise = new Promise((resolve, reject)=>{
-                    this.drainResolve = resolve;
-                    this.drainReject = reject;
-                });
+            if (this.verbose) console.log('Task - '+'*'.repeat(this.getTaskCount()));
+
+            if (this.reserved.length > (this.concurrency>>1)) {
+                if (this.verbose) console.log('Task - Drain');
+                return this.onceHasIdle();
             }
             return resolved;
         }
@@ -282,7 +251,7 @@ export class ConcurrencyQueue
     }
 
     getTaskCount():number {
-        return this.reserved.length + concurrencyCount - this.idles;
+        return this.reserved.length + this.concurrency - this.idles;
     }
 }
 
