@@ -1064,7 +1064,7 @@ export class BundlerModule
                 const info = module.resolvedModule;
                 if (!info)
                 {
-                    if (!childModuleMpath.startsWith('.'))
+                    if (!importName.startsWith('.'))
                     {
                         if (builtin.has(childModuleMpath))
                         {
