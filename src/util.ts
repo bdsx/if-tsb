@@ -395,6 +395,35 @@ export function parsePostfix(str:string|number|undefined):number|undefined
     return value;
 }
 
+const indexOfSep:(path:string, offset?:number)=>number = path.sep === '/' ? 
+    (v, offset)=>v.indexOf(v, offset) :
+    (v, offset)=>{
+        const idx1 = v.indexOf('/', offset);
+        const idx2 = v.indexOf(path.sep, offset);
+        if (idx1 === -1) return idx2;
+        if (idx2 === -1) return idx1;
+        return Math.min(idx1, idx2);
+    };
+
+const lastIndexOfSep:(path:string, offset?:number)=>number = path.sep === '/' ? 
+    (v, offset)=>v.lastIndexOf(v, offset) :
+    (v, offset)=>Math.max(v.lastIndexOf('/', offset), v.lastIndexOf(path.sep, offset));
+
+
+export function dirnameModulePath(path:string):string {
+    let p = path.length-1;
+    for (;;) {
+        const idx = lastIndexOfSep(path, p)+1;
+        switch (path.substr(idx)) {
+        case '':
+        case '.':
+            p = idx-1;
+            continue;
+        case '..': return path + '/..';
+        default: return path.substr(0, idx);
+        }
+    }
+}
 export function joinModulePath(...pathes:string[]):string
 {
     const out:string[] = [];
@@ -409,19 +438,20 @@ export function joinModulePath(...pathes:string[]):string
         {
             out.length = 0;
             backcount = 0;
-            const dot = child.indexOf('/', prev);
-            absolute = (dot === -1) ? child.substr(prev) : child.substring(prev, dot);
-            if (dot === -1) break;
-            prev = dot + 1;
+            const sepidx = indexOfSep(child, prev);
+            absolute = (sepidx === -1) ? child.substr(prev) : child.substring(prev, sepidx);
+            if (sepidx === -1) continue;
+            prev = sepidx + 1;
         }
 
         for (;;)
         {
-            const dot = child.indexOf('/', prev);
+            const dot = indexOfSep(child, prev);
             const partname = (dot === -1) ? child.substr(prev) : child.substring(prev, dot);
             switch (partname)
             {
             case '.': break;
+            case '': break;
             case '..':
                 if (!out.pop())
                 {

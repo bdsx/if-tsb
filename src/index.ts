@@ -13,7 +13,7 @@ import { MemoryManager } from './memmgr';
 import { namelock } from './namelock';
 import { SourceMap } from './sourcemap';
 import { WriterStream as FileWriter } from './streamwriter';
-import { changeExt, ConcurrencyQueue, count, defaultFormatHost, getScriptKind, joinModulePath, parsePostfix, resolved, SkipableTaskQueue, splitContent, time } from './util';
+import { changeExt, ConcurrencyQueue, count, defaultFormatHost, dirnameModulePath, getScriptKind, joinModulePath, parsePostfix, resolved, SkipableTaskQueue, splitContent, time } from './util';
 import { FilesWatcher } from './watch';
 import colors = require('colors');
 import globToRegExp = require('glob-to-regexp');
@@ -21,7 +21,7 @@ import globToRegExp = require('glob-to-regexp');
 const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
-const CACHE_VERSION = 'TSBC-0.8';
+const CACHE_VERSION = 'TSBC-0.9';
 const CACHE_SIGNATURE = '\n'+CACHE_VERSION;
 const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
 const memoryCache = new MemoryManager<RefinedModule>(CACHE_MEMORY_DEFAULT);
@@ -1038,7 +1038,13 @@ export class BundlerModule
                     }
                 }, oldsys);
 
-                const childModuleMpath = joinModulePath(this.mpath, importName);
+                let childModuleMpath:string;
+                if (!this.id.apath.endsWith(`${path.sep}index`) && !this.mpath.endsWith('/index')) {
+                    childModuleMpath = joinModulePath(this.mpath, importName);
+                } else {
+                    const dirmodule = dirnameModulePath(this.mpath);
+                    childModuleMpath = joinModulePath(dirmodule, importName);
+                }
                 if (childModuleMpath === 'path')
                 {
                     return preimport('path');
