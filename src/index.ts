@@ -178,6 +178,7 @@ export class RefinedModule
     sourceMapText:string|null = null;
     content:string = '';
     size:number;
+    errored = false;
 
     constructor(public readonly id:BundlerModuleId, public readonly mtime:number)
     {
@@ -196,6 +197,7 @@ export class RefinedModule
 
     save(bundler:Bundler):void
     {
+        if (this.errored) return;
         bundler.taskQueue.ref();
         this.saving.run(async()=>{
             try
@@ -681,7 +683,9 @@ export class Bundler
                 this._appendChildren(child, childRefined);
 
                 await this.write(child, childRefined);
-                memoryCache.put(childRefined.id.number, childRefined);
+                if (!childRefined.errored) {
+                    memoryCache.put(childRefined.id.number, childRefined);
+                }
             });
         }
     }
@@ -975,7 +979,6 @@ export class BundlerModule
         refined = new RefinedModule(this.id, Date.now());
         refined.content = `// ${this.rpath}\n`;
 
-        let doNotSave = false;
         let useDirName = false;
         let useFileName = false;
         let useModule = false;
@@ -1022,7 +1025,7 @@ export class BundlerModule
                 {
                     if (!bundler.suppressDynamicImportErrors)
                     {
-                        doNotSave = true;
+                        refined!.errored = true;
                         this.error(getErrorPosition(), IfTsbError.Unsupported, `if-tsb does not support dynamic import for local module, (${ts.SyntaxKind[_node.kind]} is not string literal)`);
                     }
                     return base;
@@ -1072,7 +1075,7 @@ export class BundlerModule
                         }
                         if (!this.bundler.bundleExternals) return base;
                     }
-                    doNotSave = true;
+                    refined!.errored = true;
                     this.error(getErrorPosition(), 2307, `Cannot find module '${importName}' or its corresponding type declarations.`);
                     return base;
                 }
@@ -1089,7 +1092,7 @@ export class BundlerModule
                     childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
                     if (!fs.existsSync(childmoduleApath))
                     {
-                        doNotSave = true;
+                        refined!.errored = true;
                         this.error(getErrorPosition(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
                         return base;
                     }
@@ -1146,7 +1149,7 @@ export class BundlerModule
                     case ts.SyntaxKind.ImportKeyword: {
                         if (node.arguments.length !== 1)
                         {
-                            doNotSave = true;
+                            refined!.errored = true;
                             this.error(getErrorPosition(), IfTsbError.Unsupported, `Cannot call import with multiple parameters`);
                             return _node;
                         }
@@ -1279,7 +1282,7 @@ export class BundlerModule
             
             if (diagnostics !== undefined && diagnostics.length !== 0)
             {
-                doNotSave = true;
+                refined!.errored = true;
                 this.bundler.main.reportFromDiagnostics(diagnostics);
             }
             if (!content)
@@ -1430,7 +1433,7 @@ export class BundlerModule
         }
 
         refined.outputLineCount = count(refined.content, '\n');
-        if (!doNotSave) refined.save(bundler);
+        refined.save(bundler);
         return refined;
     }
 }
