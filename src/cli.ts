@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
 import { bundle, bundleWatch, clearBundlerCache } from "./index";
+import fs = require('fs');
+import path = require('path');
 
 (async()=>{
 
-    const path:string[] = [];
+    const targetPathes:string[] = [];
 
     const argc = process.argv.length;
     let watch = false;
@@ -33,6 +35,11 @@ import { bundle, bundleWatch, clearBundlerCache } from "./index";
             case '-clear-cache':
                 clearCache = true;
                 break;
+            case '-version':
+            case 'v':
+                const packagejson = JSON.parse(fs.readFileSync(`${__dirname}${path.sep}..${path.sep}package.json`, 'utf-8'));
+                console.log(packagejson.version);
+                break;
             default:
                 console.error(`if-tsb: unknown options: ${v}`);
                 error = true;
@@ -41,7 +48,7 @@ import { bundle, bundleWatch, clearBundlerCache } from "./index";
         }
         else
         {  
-            path.push(v);
+            targetPathes.push(v);
         }
     }
     
@@ -50,18 +57,18 @@ import { bundle, bundleWatch, clearBundlerCache } from "./index";
     {
         await clearBundlerCache();
     }
-    if (path.length === 0)
+    if (targetPathes.length === 0)
     {
         if (clearCache) return;
-        path.push('.');
+        targetPathes.push('.');
     }
 
     if (watch)
     {
-        bundleWatch(path, output);
+        bundleWatch(targetPathes, output);
     }
     else
     {
-        await bundle(path, output);
+        await bundle(targetPathes, output);
     }
 })().catch(err=>console.error(err));

@@ -1482,8 +1482,13 @@ export class BundlerMainContext
                     const id = cache[apath];
                     cache[apath] = new BundlerModuleId(id.number, id.varName, apath);
                     if (id.number >= 0) {
-                        count++;
-                        using.add(id.number);
+                        if (using.has(id.number)) {
+                            console.error(colors.red(`if-tsb: cache file is corrupted (${id.apath})`));
+                            delete cache[apath];
+                        } else {
+                            count++;
+                            using.add(id.number);
+                        }
                     }
                 }
             }
