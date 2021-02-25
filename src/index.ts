@@ -216,6 +216,7 @@ export class RefinedModule
                 namelock.lock(this.id.number);
                 const writer = new FileWriter(getCacheFilePath(this.id));
                 await writer.write(`${this.sourceMtime}\n`);
+                await writer.write(`${this.tsconfigMtime}\n`);
                 await writer.write(ImportInfo.stringify(this.imports)+'\n');
                 await writer.write(this.firstLineComment ? this.firstLineComment+'\n' : '\n');
                 await writer.write(this.sourceMapOutputLineOffset+'\n');
@@ -233,7 +234,7 @@ export class RefinedModule
         });
     }
 
-    async load():Promise<void>
+    async load():Promise<boolean>
     {
         const cachepath = getCacheFilePath(this.id);
         let content:string;
@@ -246,7 +247,7 @@ export class RefinedModule
         {
             namelock.unlock(this.id.number);
         }
-        if (!content.endsWith(CACHE_SIGNATURE)) throw Error('Outdated cache or failed data');
+        if (!content.endsWith(CACHE_SIGNATURE)) return false;
         const [
             sourceMtime,
             tsconfigMtime,
@@ -266,6 +267,7 @@ export class RefinedModule
         this.sourceMapText = sourceMapText || null;
         this.content = source.substr(0, source.length - CACHE_SIGNATURE.length);
         this.size = this.content.length + 2048;
+        return true;
     }
     
     static async getRefined(id:BundlerModuleId, tsconfigMtime:number):Promise<{refined:RefinedModule|null, sourceMtime:number}>
@@ -303,7 +305,8 @@ export class RefinedModule
                     namelock.unlock(id.number);
                 }
                 const refined = new RefinedModule(id);
-                await refined.load();
+                const loaded = await refined.load();
+                if (!loaded) break _error;
                 if (refined.sourceMtime !== sourceMtime) break _error;
                 if (refined.tsconfigMtime !== tsconfigMtime) break _error;
                 return {refined, sourceMtime};
