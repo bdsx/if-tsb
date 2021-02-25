@@ -21,7 +21,7 @@ import globToRegExp = require('glob-to-regexp');
 const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
 const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 const builtin = new Set<string>(require('module').builtinModules);
-const CACHE_VERSION = 'TSBC-0.9';
+const CACHE_VERSION = 'TSBC-0.10';
 const CACHE_SIGNATURE = '\n'+CACHE_VERSION;
 const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
 const memoryCache = new MemoryManager<RefinedModule>(CACHE_MEMORY_DEFAULT);
@@ -75,7 +75,7 @@ enum IfTsbError
     Unsupported=20001,
     JsError=20002,
     Dupplicated=20003,
-    ModuleNotFound=6053,
+    ModuleNotFound=2307,
 }
 
 enum ExternalMode
@@ -179,12 +179,23 @@ export class RefinedModule
     content:string = '';
     size:number;
     errored = false;
+    sourceMtime:number;
+    tsconfigMtime:number;
 
-    constructor(public readonly id:BundlerModuleId, public readonly mtime:number)
+    constructor(
+        public readonly id:BundlerModuleId)
     {
     }
 
     private readonly saving = new SkipableTaskQueue;
+
+    checkRelativePath(rpath:string):boolean {
+        const lineend = this.content.indexOf('\n');
+        if (lineend === -1) return false;
+        const matched = this.content.substr(0, lineend).match(/^\/\/ (.+)$/);
+        if (matched === null) return false;
+        return matched[1] === rpath;
+    }
 
     clear():void
     {
@@ -204,6 +215,7 @@ export class RefinedModule
             {
                 namelock.lock(this.id.number);
                 const writer = new FileWriter(getCacheFilePath(this.id));
+                await writer.write(`${this.sourceMtime}\n`);
                 await writer.write(ImportInfo.stringify(this.imports)+'\n');
                 await writer.write(this.firstLineComment ? this.firstLineComment+'\n' : '\n');
                 await writer.write(this.sourceMapOutputLineOffset+'\n');
@@ -236,13 +248,17 @@ export class RefinedModule
         }
         if (!content.endsWith(CACHE_SIGNATURE)) throw Error('Outdated cache or failed data');
         const [
+            sourceMtime,
+            tsconfigMtime,
             imports, 
             firstLineComment, 
             sourceMapOutputLineOffset,
             outputLineCount,
             sourceMapText,
             source
-        ] = splitContent(content, 6, '\n');
+        ] = splitContent(content, 8, '\n');
+        this.sourceMtime = +sourceMtime;
+        this.tsconfigMtime = +tsconfigMtime;
         this.imports = imports === '' ? [] : ImportInfo.parse(imports);
         this.firstLineComment = firstLineComment || null;
         this.sourceMapOutputLineOffset = +sourceMapOutputLineOffset;
@@ -252,43 +268,54 @@ export class RefinedModule
         this.size = this.content.length + 2048;
     }
     
-    static async getRefined(id:BundlerModuleId, tsconfigMtime:number):Promise<RefinedModule|null>
+    static async getRefined(id:BundlerModuleId, tsconfigMtime:number):Promise<{refined:RefinedModule|null, sourceMtime:number}>
     {
-        try
+        let sourceMtime = -1;
+        _error:try
         {
             const cached = memoryCache.take(id.number);
             if (cached !== undefined)
             {
                 const file = await fsp.stat(id.apath);
-                if (cached.mtime < tsconfigMtime) return null;
-                if (cached.mtime < +file.mtime) return null;
-                return cached;
+                sourceMtime = +file.mtime;
+                if (cached.sourceMtime !== sourceMtime) break _error;
+                if (cached.tsconfigMtime !== tsconfigMtime) break _error;
+                return {refined:cached, sourceMtime};
             }
             else
             {
-                let cachemtime = 0;
                 try
                 {
                     namelock.lock(id.number);
                     const cachepath = getCacheFilePath(id);
-                    const [cache, file] = await Promise.all([fsp.stat(cachepath), fsp.stat(id.apath)]);
-                    cachemtime = +cache.mtime;
-                    if (cachemtime < tsconfigMtime) return null;
-                    if (cachemtime < +file.mtime) return null;
+                    let cacheMtime = -1;
+                    await Promise.all([fsp.stat(cachepath).then(cache=>{
+                        cacheMtime = +cache.mtime;
+                    }, ()=>{}), fsp.stat(id.apath).then(source=>{
+                        sourceMtime = +source.mtime;
+                    }, ()=>{})]);
+                    if (cacheMtime === -1) break _error;
+                    if (cacheMtime < tsconfigMtime) break _error;
+                    if (cacheMtime < sourceMtime) break _error;
                 }
                 finally
                 {
                     namelock.unlock(id.number);
                 }
-                const refined = new RefinedModule(id, cachemtime);
+                const refined = new RefinedModule(id);
                 await refined.load();
-                return refined;
+                if (refined.sourceMtime !== sourceMtime) break _error;
+                if (refined.tsconfigMtime !== tsconfigMtime) break _error;
+                return {refined, sourceMtime};
             }
         }
         catch (err)
         {
-            return null;
+            if (err.code !== 'ENOENT') {
+                throw err;
+            }
         }
+        return {refined:null, sourceMtime};
     }
     
 }
@@ -675,11 +702,20 @@ export class Bundler
                 continue;
             }
             if (child.isAppended) continue;
-            this.deplist.push(child.id.apath);
             child.isAppended = true;
             await this.taskQueue.run(async()=>{
                 const childRefined = await child.refine();
-                if (childRefined === null) return;
+                if (childRefined === null) {
+                    try {
+                        const writer = await this._lock();
+                        await writer.write(`${child.id.varName}(){ throw Error("Cannot find module '${child.mpath}'"); }\n`);
+                    } finally {
+                        this._unlock();
+                    }
+                    module.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${child.mpath}'`);
+                    return;
+                }
+                this.deplist.push(child.id.apath);
                 this._appendChildren(child, childRefined);
 
                 await this.write(child, childRefined);
@@ -930,7 +966,7 @@ export class BundlerModule
     {
         if (pos === null)
         {
-            this.bundler.main.reportMessage(code, message);
+            this.bundler.main.report(this.rpath, 0, 0, code, message, '', 0);
         }
         else
         {
@@ -970,14 +1006,25 @@ export class BundlerModule
 
     async refine():Promise<RefinedModule|null>
     {
-        let refined = await RefinedModule.getRefined(this.id, this.bundler.tsconfigMtime);
-        if (refined !== null) return refined;
+        let {refined, sourceMtime} = await RefinedModule.getRefined(this.id, this.bundler.tsconfigMtime);
+        if (refined !== null) {
+            if (refined.checkRelativePath(this.rpath)) {
+                return refined;
+            }
+            // cache changed
+        }
+        if (sourceMtime === -1) {
+            this.error(null, IfTsbError.ModuleNotFound, `Cannot find module ${this.mpath}`);
+            return null;
+        }
 
         this.children.length = 0;
         this.importLines.length = 0;
 
-        refined = new RefinedModule(this.id, Date.now());
+        refined = new RefinedModule(this.id);
         refined.content = `// ${this.rpath}\n`;
+        refined.sourceMtime = sourceMtime;
+        refined.tsconfigMtime = this.bundler.tsconfigMtime;
 
         let useDirName = false;
         let useFileName = false;
@@ -1076,7 +1123,7 @@ export class BundlerModule
                         if (!this.bundler.bundleExternals) return base;
                     }
                     refined!.errored = true;
-                    this.error(getErrorPosition(), 2307, `Cannot find module '${importName}' or its corresponding type declarations.`);
+                    this.error(getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importName}' or its corresponding type declarations.`);
                     return base;
                 }
 
@@ -1093,7 +1140,7 @@ export class BundlerModule
                     if (!fs.existsSync(childmoduleApath))
                     {
                         refined!.errored = true;
-                        this.error(getErrorPosition(), 2307, `Cannot find module '${node.text}' or its corresponding type declarations.`);
+                        this.error(getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${node.text}' or its corresponding type declarations.`);
                         return base;
                     }
                 }
@@ -1183,7 +1230,7 @@ export class BundlerModule
         }
         catch (err)
         {
-            this.bundler.main.reportMessage(IfTsbError.ModuleNotFound, err.message+' '+filepath);
+            this.error(null, IfTsbError.ModuleNotFound, err.message+' '+filepath);
             return null;
         }
         
@@ -1376,7 +1423,7 @@ export class BundlerModule
             if (useFileName || useDirName)
             {
                 const prefix = this.isEntry ? '' : `${bundler.constKeyword} `;
-                let rpath = path.relative(bundler.output, this.id.apath);
+                let rpath = path.relative(path.dirname(bundler.output), this.id.apath);
                 if (useFileName)
                 {
                     if (path.sep !== '/') rpath = rpath.split(path.sep).join('/');
@@ -1433,6 +1480,7 @@ export class BundlerModule
         }
 
         refined.outputLineCount = count(refined.content, '\n');
+        refined.size = refined.content.length + 2048;
         refined.save(bundler);
         return refined;
     }
@@ -1483,7 +1531,7 @@ export class BundlerMainContext
                     cache[apath] = new BundlerModuleId(id.number, id.varName, apath);
                     if (id.number >= 0) {
                         if (using.has(id.number)) {
-                            console.error(colors.red(`if-tsb: cache file is corrupted (${id.apath})`));
+                            console.error(colors.red(`if-tsb: cache file is corrupted (${apath})`));
                             delete cache[apath];
                         } else {
                             count++;
@@ -1550,9 +1598,11 @@ export class BundlerMainContext
         console.log(`${colors.cyan(source)}:${colors.yellow(linestr)}:${colors.yellow((column)+'')} - ${colors.red('error')} ${colors.gray('TS'+code+':')} ${message}`);
         console.log();
 
-        console.log(colors.black(colors.bgWhite(linestr))+' '+lineText);
-        console.log(colors.bgWhite(' '.repeat(linestr.length))+' '.repeat(column+1)+colors.red('~'.repeat(width)));
-        console.log();
+        if (line !== 0) {
+            console.log(colors.black(colors.bgWhite(linestr))+' '+lineText);
+            console.log(colors.bgWhite(' '.repeat(linestr.length))+' '.repeat(column+1)+colors.red('~'.repeat(width)));
+            console.log();   
+        }
     }
 
     /**

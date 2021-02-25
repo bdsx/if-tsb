@@ -59,6 +59,7 @@ export class MemoryManager<T extends Node<T>>
         
         const last = this.axis._prev!;
         last._next = node;
+        node._key = key;
         node._prev = last;
         node._next = this.axis;
         this.axis._prev = node;
