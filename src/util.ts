@@ -145,12 +145,12 @@ export class ConcurrencyQueue
     private _error:any = EMPTY;
     public verbose = false;
 
-    constructor(private readonly concurrency = concurrencyCount) {
+    constructor(public readonly name:string, private readonly concurrency = concurrencyCount) {
         this.idles = this.concurrency;
     }
 
     private readonly _next:()=>(Promise<void>|void) = ()=>{
-        if (this.verbose) console.log('Task - '+'*'.repeat(this.getTaskCount()));
+        if (this.verbose) console.log(`${this.name} - ${'*'.repeat(this.getTaskCount())}`);
 
         if (this.reserved.length === 0)
         {
@@ -173,9 +173,9 @@ export class ConcurrencyQueue
     {
         if (this._ref === 0 && this.idles === this.concurrency)
         {
-            if (this.verbose) console.log('Task - End');
             if (this.endResolve !== null)
             {
+                if (this.verbose) console.log(`${this.name} - End`);
                 this.endResolve();
                 this.endResolve = null;
                 this.endReject = null;
@@ -216,7 +216,7 @@ export class ConcurrencyQueue
     onceHasIdle():Promise<void>
     {
         if (this.idlePromise !== null) return this.idlePromise;
-        if (this.idles !== 0) return Promise.resolve();
+        if (this.idles !== 0) return resolved;
         return this.idlePromise = new Promise((resolve, reject)=>{
             this.idleResolve = resolve;
             this.idleReject = reject;
@@ -226,7 +226,7 @@ export class ConcurrencyQueue
     onceEnd():Promise<void>
     {
         if (this.endPromise !== null) return this.endPromise;
-        if (this.idles === this.concurrency) return Promise.resolve();
+        if (this.idles === this.concurrency) return resolved;
         return this.endPromise = new Promise((resolve, reject)=>{
             this.endResolve = resolve;
             this.endReject = reject;
@@ -237,10 +237,10 @@ export class ConcurrencyQueue
     {
         this.reserved.push(task);
         if (this.idles === 0) {
-            if (this.verbose) console.log('Task - '+'*'.repeat(this.getTaskCount()));
+            if (this.verbose) console.log(`${this.name} - ${'*'.repeat(this.getTaskCount())}`);
 
             if (this.reserved.length > (this.concurrency>>1)) {
-                if (this.verbose) console.log('Task - Drain');
+                if (this.verbose) console.log(`${this.name} - Drain`);
                 return this.onceHasIdle();
             }
             return resolved;
@@ -354,7 +354,10 @@ export function parsePostfix(str:string|number|undefined):number|undefined
     case 'number': return str;
     default: return undefined;
     }
-    const n = str.length;
+    let n = str.length;
+    if (str.endsWith('B')) {
+        n--;
+    }
     let value = 0;
     for (let i=0;i<n;i++)
     {
@@ -367,7 +370,7 @@ export function parsePostfix(str:string|number|undefined):number|undefined
         }
         if (i !== n-1)
         {
-            console.error(`Unknown nummer character: ${str.charAt(i)}`);
+            console.error(`Invalid number character: ${str.charAt(i)}`);
             continue;
         }
         switch (code)

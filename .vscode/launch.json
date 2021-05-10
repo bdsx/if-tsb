@@ -20,32 +20,6 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Bundle BDSX",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\bdsx", "-w", "--clear-cache"],
-            "outFiles": [
-                "${workspaceFolder}/**/*.js"
-            ]
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Bundle BDSX old",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\old\\bdsx", "-w", "--clear-cache"],
-            "outFiles": [
-                "${workspaceFolder}/**/*.js"
-            ]
-        },
-        {
-            "type": "node",
-            "request": "launch",
             "name": "Bundle Closure Compiler",
             "skipFiles": [
                 "<node_internals>/**"

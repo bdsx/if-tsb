@@ -71,8 +71,8 @@ if-tab --clear-cache # clear cache
         "bundleExternals":false, // bundle files in node_modules
         "externals": [], // files that do not bundle
         "cacheMemory": "1MB", // cache memory for watching
-        "module": "none", // "commonjs"|"none"|"self"|"window"|"this"|"var (varname)"||"let (varname)"|"const (varname)"
-        "preimport": [], // modules for pre-import. it replaces require('name') to __tsb.__m.name
+        "module": "none", // "commonjs"|"none"|"self"|"window"|"this"|"var (varname)"|"let (varname)"|"const (varname)"
+        "preimport": [], // modules for pre-import. it replaces require('name') to __tsb.name
     },
     "compilerOptions": {
         /* ... */
@@ -85,12 +85,32 @@ if-tab --clear-cache # clear cache
     "entry": {
         "./entry.ts": {
             "output": "./bundled.output.js",
-            "...bundlerOptions": "...bundlerOptions"
+            /* ...bundlerOptions */
         },
         "./entry2.ts": {
             "output": "./bundled.output2.js",
-            "...bundlerOptions": "...bundlerOptions"
+            /* ...bundlerOptions */
         }
+    },
+    "bundlerOptions": {
+        /* ...bundlerOptions */
+    },
+    "compilerOptions": {
+        /* ... */
+    }
+}
+```
+* Sharing codes  
+```js
+{
+    "entry": "./index.ts",
+    "share": {
+        "./lib.ts":"share",
+        "./libdir/**/*.ts":"share2",
+        "globalmodule": "share3"
+    },
+    "bundlerOptions": {
+        /* ...bundlerOptions */
     },
     "compilerOptions": {
         /* ... */

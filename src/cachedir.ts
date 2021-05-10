@@ -1,6 +1,7 @@
 
 import path = require('path');
 import fs = require('fs');
+import { BundlerModuleId } from './module';
 
 function findUp(pathname:string):string|null {
 	let directory = process.cwd();
@@ -50,7 +51,7 @@ function getNodeModuleDirectory(directory:string) {
 	return nodeModules;
 }
 
-export function findCacheDir(name:string) {
+function findCacheDir(name:string) {
 	if (env.CACHE_DIR && ['true', 'false', '1', '0'].indexOf(env.CACHE_DIR) === -1) {
 		return path.join(env.CACHE_DIR, 'find-cache-dir');
 	}
@@ -66,4 +67,14 @@ export function findCacheDir(name:string) {
 	}
 
 	return path.join(directory, 'node_modules', '.cache', name);
+}
+
+export const cacheDir = findCacheDir('if-tsb') || './.if-tsb.cache';
+export const cacheMapPath = path.join(cacheDir, 'cachemap.json');
+export const CACHE_VERSION = 'TSBC-0.10';
+export const CACHE_SIGNATURE = '\n'+CACHE_VERSION;
+
+export function getCacheFilePath(id:BundlerModuleId):string
+{
+    return path.join(cacheDir, id.number+'');
 }
