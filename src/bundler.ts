@@ -6,7 +6,7 @@ import { ConcurrencyQueue } from "./concurrent";
 import { BundlerMainContext } from "./context";
 import { CounterLock } from "./counterlock";
 import { fsp } from "./fsp";
-import { CacheMap } from "./memmgr";
+import { memcache } from "./memmgr";
 import { BundlerModule, BundlerModuleId, CheckState, memoryCache, RefinedModule } from "./module";
 import { SourceFileCache } from "./sourcefilecache";
 import { SourceMap, SourceMapDirect } from "./sourcemap";
@@ -226,8 +226,9 @@ export class Bundler {
         }
         this.taskQueue = new ConcurrencyQueue(path.basename(this.entryApath || this.basedir) + ' Task', Number(boptions.concurrency) || undefined);
         if (this.verbose) {
-            CacheMap.verbose = true;
-            ConcurrencyQueue.verbose = true;
+            fsp.verbose = true;
+            memcache.verbose = true;
+            // ConcurrencyQueue.verbose = true;
         }
     }
 
@@ -308,14 +309,12 @@ export class Bundler {
     
     async write(lock:WritingLock, module:BundlerModule, refined:RefinedModule):Promise<void> {
         const [jsWriter, dtsWriter] = await lock.lock();
-        if (this.verbose) console.log(refined.id.apath+': writing');
         try {
             await concurrent(
                 jsWriter.write(refined.content), 
                 dtsWriter !== null && module.needDeclaration && refined.declaration !== null ? dtsWriter.write(refined.declaration) : null
             );
         } finally {
-            if (this.verbose) console.log(refined.id.apath+': writing end');
             lock.unlock();
         }
         const offset = this.sourceMapLineOffset + refined.sourceMapOutputLineOffset;
@@ -438,9 +437,7 @@ export class Bundler {
                     this.deplist.push(module.id.apath);
                     this._appendChildren(lock, module, refined);
                     await this.write(lock, module, refined);
-                    if (!refined.errored) {
-                        memoryCache.release(refined.id.number, refined);
-                    }
+                    memcache.release(refined);
                 }
                 this.writingCounter.decrease();
             })();
@@ -566,7 +563,7 @@ export class Bundler {
         
         if (entryModule !== null) {
             await this.write(lock, entryModule, entryRefined!);
-            memoryCache.release(entryRefined!.id.number, entryRefined!);
+            memcache.release(entryRefined!);
         }
 
         const saveProm = (async()=>{

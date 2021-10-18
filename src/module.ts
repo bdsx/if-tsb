@@ -3,7 +3,8 @@ import { CACHE_SIGNATURE, getCacheFilePath } from "./cachedir";
 import { ErrorPosition } from "./errpos";
 import { fsp } from "./fsp";
 import { LineStripper } from "./linestripper";
-import { CacheMap } from "./memmgr";
+import { memcache } from "./memmgr";
+import { getMtime } from "./mtimecache";
 import { namelock } from "./namelock";
 import { SourceFileData } from "./sourcefilecache";
 import { WriterStream as FileWriter } from './streamwriter';
@@ -13,8 +14,8 @@ import path = require('path');
 import fs = require("fs");
 import ts = require("typescript");
 export const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
-CacheMap.maximum = CACHE_MEMORY_DEFAULT;
-export const memoryCache = new CacheMap<number, RefinedModule>();
+memcache.maximum = CACHE_MEMORY_DEFAULT;
+export const memoryCache = new memcache.Map<number, RefinedModule>();
 const builtin = new Set<string>([
     'assert',
     'buffer',
@@ -99,7 +100,7 @@ export class RefinedModule {
     sourceMtime:number;
     tsconfigMtime:number;
 
-    private mtime:number|null;
+    private mtime:number|null = null;
 
     constructor(public readonly id:BundlerModuleId) {
     }
@@ -148,12 +149,6 @@ export class RefinedModule {
         });
     }
 
-    async getMtime():Promise<number> {
-        if (this.mtime !== null) return this.mtime;
-        const stat = await fsp.stat(this.id.apath);
-        return this.mtime = +stat.mtime;
-    }
-
     async load():Promise<boolean> {
         const cachepath = getCacheFilePath(this.id);
         let content:string;
@@ -193,20 +188,30 @@ export class RefinedModule {
         _error:try {
             const cached = memoryCache.take(id.number);
             if (cached != null) {
-                sourceMtime = await cached.getMtime();
-                if (cached.sourceMtime !== sourceMtime) break _error;
-                if (cached.tsconfigMtime !== tsconfigMtime) break _error;
+                sourceMtime = await getMtime(id.apath);
+                if (cached.sourceMtime !== sourceMtime) {
+                    memcache.unuse(cached);
+                    break _error;
+                }
+                if (cached.tsconfigMtime !== tsconfigMtime) {
+                    memcache.unuse(cached);
+                    break _error;
+                }
                 return {refined:cached, sourceMtime};
             } else {
                 try {
                     await namelock.lock(id.number);
                     const cachepath = getCacheFilePath(id);
                     let cacheMtime = -1;
-                    await Promise.all([fsp.stat(cachepath).then(cache=>{
-                        cacheMtime = +cache.mtime;
-                    }, ()=>{}), fsp.stat(id.apath).then(source=>{
-                        sourceMtime = +source.mtime;
-                    }, ()=>{})]);
+                    await Promise.all([
+                        getMtime(cachepath).then(mtime=>{
+                            cacheMtime = mtime;
+                        }, ()=>{}),
+                        getMtime(id.apath).then(mtime=>{
+                            sourceMtime = mtime;
+                        }, ()=>{}),
+                    ]);
+                    
                     if (cacheMtime === -1) break _error;
                     if (cacheMtime < tsconfigMtime) break _error;
                     if (cacheMtime < sourceMtime) break _error;
@@ -328,7 +333,7 @@ export class BundlerModule {
         let sourceFile:ts.SourceFile;
         try {
             let error = '';
-            const data = bundler.sourceFileCache.get(filepath.replace(/\\/g, '/'));
+            const data = bundler.sourceFileCache.take(filepath.replace(/\\/g, '/'));
             refs.push(data);
             sourceFile = await data.get();
             if (sourceFile == null) {
@@ -580,7 +585,7 @@ export class BundlerModule {
                     if (bundler.faster) {
                         return undefined;
                     }
-                    const data = bundler.sourceFileCache.get(fileName);
+                    const data = bundler.sourceFileCache.take(fileName);
                     refs.push(data);
                     return data.getSync();
                 },
@@ -589,13 +594,11 @@ export class BundlerModule {
                     const info = getScriptKind(name);
                     if (info.kind === ts.ScriptKind.JS) {
                         content = text;
-                    }
-                    else if (info.kind === ts.ScriptKind.External) {
+                    } else if (info.kind === ts.ScriptKind.External) {
                         if (that.needDeclaration) {
                             declaration = text;
                         }
-                    }
-                    else if (info.ext === '.MAP') {
+                    } else if (info.ext === '.MAP') {
                         sourceMapText = text;
                     }
                 },
@@ -614,6 +617,7 @@ export class BundlerModule {
 
             bundler.program = ts.createProgram([filepath], tsoptions, compilerHost, bundler.program, diagnostics);
             
+            if (bundler.verbose) console.log(`emit ${filepath} ${new Date(sourceMtime).toLocaleTimeString()}`);
             bundler.program.emit(
                 /*targetSourceFile*/ sourceFile, 
                 /*writeFile*/ undefined, 
@@ -625,8 +629,10 @@ export class BundlerModule {
             
             if (diagnostics != null) {
                 diagnostics.push(...bundler.program.getSyntacticDiagnostics(sourceFile));
-                refined!.errored = true;
-                printDiagnostrics(diagnostics);
+                if (diagnostics.length !== 0) {
+                    refined!.errored = true;
+                    printDiagnostrics(diagnostics);
+                }
             }
             if (content === '') {
                 if (diagnostics == null) {
@@ -795,7 +801,7 @@ export class BundlerModule {
         }
 
         for (const ref of refs) {
-            bundler.sourceFileCache.release(ref);
+            ref.release();
         }
         refined.outputLineCount = count(refined.content, '\n');
         refined.size = refined.content.length + 2048;
@@ -803,24 +809,27 @@ export class BundlerModule {
         return refined;
     }
 
+    private async _checkExternalChanges(refined:RefinedModule):Promise<boolean> {
+        for (const imp of refined.imports) {
+            if (imp.getExternalMode() !== ExternalMode.NoExternal) continue;
+            const mpath = this.makeImportModulePath(imp.importPath);
+            for (const glob of this.bundler.externals) {
+                if (glob.test(mpath)) return true;
+            }
+        }
+        return false;
+    }
+
     async refine():Promise<RefinedModule|null> {
         let {refined, sourceMtime} = await RefinedModule.getRefined(this.id, this.bundler.tsconfigMtime);
-        if (refined === null || (this.needDeclaration && refined.declaration === null) || !refined.checkRelativePath(this.rpath)) {
+        if (refined === null || 
+            refined.errored || 
+            (this.needDeclaration && refined.declaration === null) || !refined.checkRelativePath(this.rpath) ||
+            (await this._checkExternalChanges(refined))) {
+            if (refined !== null) memcache.unuse(refined);
             refined = await this._refine(sourceMtime);
             if (refined === null) return null;
-        } else {
-            // check external changes
-            _renewed: for (const imp of refined.imports) {
-                if (imp.getExternalMode() !== ExternalMode.NoExternal) continue;
-                const mpath = this.makeImportModulePath(imp.importPath);
-                for (const glob of this.bundler.externals) {
-                    if (glob.test(mpath)) {
-                        refined = await this._refine(sourceMtime);
-                        if (refined === null) return null;
-                        break _renewed;
-                    }
-                }
-            }
+            memoryCache.register(refined.id.number, refined);
         }
         for (const imp of refined.imports) {
             const mode = imp.getExternalMode();

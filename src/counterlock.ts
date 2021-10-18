@@ -14,6 +14,8 @@ export class CounterLock {
         if (this.counter === 0) {
             if (this.resolver !== null) {
                 this.resolver();
+                this.resolver = null;
+                this.prom = null;
             }
         }
     }

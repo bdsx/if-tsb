@@ -1,14 +1,14 @@
+import { isTypeReferenceNode } from "typescript";
 
 interface Node{
     clear():void;
     size:number;
 
-    _key?:keyof any;
     _next?:Node;
     _prev?:Node;
     _cacheTimer?:number;
-    _host?:CacheMap<any, any>;
     _ref?:number;
+    _deleter?:()=>void;
 }
 
 const axis = {} as Node;
@@ -33,8 +33,22 @@ function renew(node:Node, cacheTimeout:number):void {
     }
 }
 
+function attach(node:Node):void {
+    const last = axis._prev!;
+    last._next = node;
+    node._prev = last;
+    node._next = axis;
+    axis._prev = node;
+    node._cacheTimer = Date.now() + memcache.cacheTimeout;
+
+    if (timer === null) {
+        timer = setTimeout(pollTimer, memcache.cacheTimeout+1);
+        timer.unref();
+    }
+}
+
 function detach(node:Node):void {
-    CacheMap.usage -= node.size;
+    memcache.usage -= node.size;
 
     const next = node._next!;
     const prev = node._prev!;
@@ -43,123 +57,123 @@ function detach(node:Node):void {
 
     delete node._prev;
     delete node._next;
-    delete node._key;
     delete node._cacheTimer;
-    delete node._host;
 }
 
-export class CacheMap<K extends keyof any, V extends Node> {
-    public static maximum = 1024*1024*1024;
-    public static usage = 0;
-    public static verbose = false;
+function reduce():boolean {
+    const node = axis._next!;
+    if (node === axis) return false;
+    node._deleter!();
+    detach(node);
+    node.clear();
+    if (memcache.verbose) console.log('[memcache] reducing...');
+    return true;
+}
 
-    private readonly map = new Map<K, V>();
-
-    constructor(public readonly cacheTimeout = 20*60*1000) {
-    }
-
-    private static _pollTimer():void{
-        const now = Date.now();
-        for (;;) {
-            const front = axis._next!;
-            if (front === axis) {
-                timer = null;
-                return;
-            }
-            const remained = front._cacheTimer! - now;
-            if (remained <= 0) {
-                CacheMap._reduce();
-                continue;
-            }
-            timer = setTimeout(CacheMap._pollTimer, remained+1);
-            timer.unref();
+function pollTimer():void{
+    const now = Date.now();
+    for (;;) {
+        const front = axis._next!;
+        if (front === axis) {
+            timer = null;
             return;
         }
+        const remained = front._cacheTimer! - now;
+        if (remained <= 0) {
+            reduce();
+            continue;
+        }
+        timer = setTimeout(pollTimer, remained+1);
+        timer.unref();
+        return;
+    }
+}
+
+const ESMap = Map;
+
+export namespace memcache {
+    export let verbose = false;
+    export let maximum = 1024*1024*1024;
+    export let usage = 0;
+    export let cacheTimeout = 20*60*1000;
+
+    export function isRegistered(item:Node):boolean {
+        return item._ref != null;
+    }
+    export function release(item:Node):void {
+        if (item._ref == null) throw Error(`non registered cache item`);
+        item._ref! --;
+        if (item._ref === 0) {
+            if (item.size > memcache.maximum) {
+                item.clear();
+                return;
+            }
+            memcache.usage += item.size;
+            while (memcache.usage > memcache.maximum) {
+                reduce();
+            }
+            attach(item);
+        }
+    }
+    export function ref(item:Node):void {
+        if (item._ref == null) throw Error(`non registered cache item`);
+        if (item._ref === 0) {
+            detach(item);
+        }
+        item._ref! ++;
+    }
+    export function unuse(item:Node):void {
+        if (item._ref == null) throw Error(`non registered cache item`);
+        if (item._ref === 0) {
+            detach(item);
+        }
+        item._deleter!();
+        delete item._deleter;
+        delete item._ref;
+        item.clear();
     }
 
-    private static _reduce():boolean {
-        const node = axis._next!;
-        if (node === axis) return false;
-        node._host!.map.delete(node._key);
-        detach(node);
-        node.clear();
-        if (CacheMap.verbose) console.log('[CacheMap] reducing...');
-        return true;
-    }
+    export class Map<K extends keyof any, V extends Node> {
     
-    release(key:K, node:V):void {
-        if (node.size > CacheMap.maximum) return;
-        CacheMap.usage += node.size;
-        while (CacheMap.usage > CacheMap.maximum) {
-            CacheMap._reduce();
-        }
-        if (node._ref != null) {
-            node._ref--;
-            if (node._ref !== 0) return;
-        } else {
-            this.map.set(key, node);
-            node._ref = 0;
-        }
+        private readonly map = new ESMap<K, V>();
         
-        const last = axis._prev!;
-        last._next = node;
-        node._key = key;
-        node._prev = last;
-        node._next = axis;
-        axis._prev = node;
-        node._cacheTimer = Date.now() + this.cacheTimeout;
-        node._host = this;
-
-        if (timer === null) {
-            timer = setTimeout(CacheMap._pollTimer, this.cacheTimeout+1);
-            timer.unref();
-        }
-    }
-
-    register(key:K, node:V):void {
-        if (node.size > CacheMap.maximum) return;
-        CacheMap.usage += node.size;
-        while (CacheMap.usage > CacheMap.maximum) {
-            CacheMap._reduce();
-        }
-        if (node._ref != null) {
-            node._ref++;
-        } else {
+        register(key:K, node:V):void {
+            if (node.size > memcache.maximum) return;
+            if (node._ref != null) throw Error(`already registered cache item`);
             node._ref = 1;
             this.map.set(key, node);
+            node._deleter = ()=>this.map.delete(key);
         }
-    }
-
-    takeOrCreate(key:K, creator:()=>V):V {
-        let v = this.take(key);
-        if (v == null) {
-            this.register(key, v = creator());
-        }
-        return v;
-    }
-
-    take(key:K):V|undefined {
-        const node = this.map.get(key);
-        if (node != null) {
-            if (node._ref === 0) {
-                detach(node);
+    
+        takeOrCreate(key:K, creator:()=>V):V {
+            let node = this.take(key);
+            if (node == null) {
+                node = creator();
+                this.register(key, node);
             }
-            node._ref! ++;
+            return node;
         }
-        return node;
-    }
+    
+        take(key:K):V|undefined {
+            const node = this.map.get(key);
+            if (node != null) {
+                ref(node);
+            }
+            return node;
+        }
+    
+        clear():void {
+            for (const item of this.map.values()) {
+                memcache.usage -= item.size;
 
-    clear():void {
-        for (const item of this.map.values()) {
-            CacheMap.usage -= item.size;
-            delete item._prev;
-            delete item._next;
-            delete item._key;
-            delete item._cacheTimer;
-            delete item._host;
-            delete item._ref;
-            item.clear();
+                detach(item);
+                item.clear();
+                
+                delete item._ref;
+                delete item._deleter;
+            }
+            this.map.clear();
         }
-        this.map.clear();
     }
+    
 }

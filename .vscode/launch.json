@@ -12,7 +12,7 @@
                 "<node_internals>/**"
             ],
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "."],
+            "args": ["${workspaceFolder}\\src\\cli.ts", ".", "-w"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]

@@ -5,7 +5,7 @@ import { Bundler } from './bundler';
 import { cacheDir } from './cachedir';
 import { BundlerMainContext } from './context';
 import { fsp } from './fsp';
-import { CacheMap } from './memmgr';
+import { memcache } from './memmgr';
 import { CACHE_MEMORY_DEFAULT, memoryCache } from './module';
 import { namelock } from './namelock';
 import { PhaseListener, TsConfig } from './types';
@@ -14,6 +14,7 @@ import { FilesWatcher } from './watch';
 import fs = require('fs');
 import path = require('path');
 import ts = require('typescript');
+import { getMtime } from './mtimecache';
 export { TsConfig };
 
 export async function bundle(entries?:string[]|null, output?:string|null|TsConfig):Promise<number> {
@@ -32,12 +33,13 @@ export async function bundle(entries?:string[]|null, output?:string|null|TsConfi
             ctx.reportFromCatch(err);
         }
     }
+    const duration = process.hrtime(started);
     await ctx.saveCacheJson();
     if (ctx.errorCount !== 0) {
         console.error(ctx.getErrorCountString());
     }
     await namelock.waitAll();
-    const duration = process.hrtime(started);
+    getMtime.clear();
     return duration[0]*1000+duration[1]/1000000;
 }
 
@@ -129,14 +131,15 @@ export namespace bundle {
                 }
     
                 console.log(`[${time()}] ${ctx.getErrorCountString()}. Watching for file changes.`);
+                const duration = process.hrtime(started);
+                console.log(`[${time()}] ${(duration[0]*1000+duration[1]/1000000).toFixed(6)}ms`);
+                getMtime.clear();
 
                 ctx.errorCount = 0;
                 await ctx.saveCacheJson();
                 watcher.resume();
                 Bundler.clearLibModules();
     
-                const duration = process.hrtime(started);
-                console.log(`[${time()}] ${(duration[0]*1000+duration[1]/1000000).toFixed(6)}ms`);
                 if (opts.onFinish != null) opts.onFinish();
             }
     
@@ -161,7 +164,7 @@ export namespace bundle {
             else watchWaiting /= watchWaitingCount;
             if (cacheMemoryCount === 0) cacheMemory = CACHE_MEMORY_DEFAULT;
             else cacheMemory /= cacheMemoryCount;
-            CacheMap.maximum = cacheMemory;
+            memcache.maximum = cacheMemory;
     
             // watch
             const watcher = new FilesWatcher<Bundler>(watchWaiting, async(list)=>{

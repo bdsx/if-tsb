@@ -68,40 +68,29 @@ export namespace fsp {
         }));
     }
         
-    export async function mkdirRecursive(dirpath:string):Promise<void> {
-        const sep = path.sep;
-        dirpath = path.resolve(dirpath);
-        
-        let index = dirpath.indexOf(sep)+1;
-        if (index === 0) return;
-
-        for (;;) {
-            const nextsep = dirpath.indexOf(sep, index);
-            if (nextsep === -1)
-            {
-                try {
-                    await mkdir(dirpath);
-                } catch (err) {
-                    if (!processMkdirError(dirpath, err))
-                    {
-                        throw err;
-                    }
-                }
-                break;
-            }
-            index = nextsep+1;
-            const dirname = dirpath.substr(0, nextsep);
-            try {
-                await mkdir(dirname);
-            } catch (err) {
-                if (!processMkdirError(dirname, err))
-                {
-                    if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
-                        throw err;
-                    }
-                }
+    export async function mkdirRecursive(dir:string):Promise<boolean> {
+        try {
+            await mkdir(dir);
+            return false;
+        } catch (err) {
+            if (err.code === 'EEXIST') {
+                return true;
+            } else if (err.code === 'ENOENT') {
+                await mkdirRecursive(path.dirname(dir));
+            } else {
+                throw err;
             }
         }
+        try {
+            await mkdir(dir);
+        } catch (err) {
+            if (err.code === 'EEXIST') {
+                return true;
+            } else {
+                throw err;
+            }
+        }
+        return false;
     }
     export async function deleteAll(filepath:string):Promise<number> {
         let count = 0;
@@ -121,41 +110,29 @@ export namespace fsp {
         return count;
     }
         
-    export function mkdirRecursiveSync(dirpath:string):void {
-        const sep = path.sep;
-        dirpath = path.resolve(dirpath);
-        
-        let index = dirpath.indexOf(sep)+1;
-        if (index === 0) return;
-        
-        for (;;) {
-            const nextsep = dirpath.indexOf(sep, index);
-            if (nextsep === -1) {
-                try {
-                    if (verbose) console.log(`mkdirSync ${dirpath}`);
-                    fs.mkdirSync(dirpath);
-                } catch (err) {
-                    if (!processMkdirError(dirpath, err))
-                    {
-                        throw err;
-                    }
-                }
-                break;
-            }
-            index = nextsep+1;
-            const dirname = dirpath.substr(0, nextsep);
-            try {
-                if (verbose) console.log(`mkdirSync ${dirname}`);
-                fs.mkdirSync(dirname);
-            } catch (err) {
-                if (!processMkdirError(dirname, err))
-                {
-                    if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
-                        throw err;
-                    }
-                }
+    export function mkdirRecursiveSync(dir:string):boolean {
+        try {
+            fs.mkdirSync(dir);
+            return false;
+        } catch (err) {
+            if (err.code === 'EEXIST') {
+                return true;
+            } else if (err.code === 'ENOENT') {
+                mkdirRecursiveSync(path.dirname(dir));
+            } else {
+                throw err;
             }
         }
+        try {
+            fs.mkdirSync(dir);
+        } catch (err) {
+            if (err.code === 'EEXIST') {
+                return true;
+            } else {
+                throw err;
+            }
+        }
+        return false;
     }
 }
 
