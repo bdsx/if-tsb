@@ -16,45 +16,6 @@
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Bundle Closure Compiler",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\js\\vscode-closure-compiler", "-w", "--clear-cache"],
-            "outFiles": [
-                "${workspaceFolder}/**/*.js"
-            ]
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Bundle Test",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\js\\if-tsb-test", "-w", "--clear-cache"],
-            "outFiles": [
-                "${workspaceFolder}/**/*.js"
-            ]
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "Bundle BDSX V3",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "C:\\Users\\ME\\Desktop\\ME\\complex\\bdsx\\bdsx-pdb-parsing\\bdsx-lib", "-w", "--clear-cache"],
-            "outFiles": [
-                "${workspaceFolder}/**/*.js"
-            ]
         }
     ]
 }
