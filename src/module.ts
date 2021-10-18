@@ -48,7 +48,7 @@ const builtin = new Set<string>([
 export class ImportInfo {
     constructor(
         public readonly apathOrExternalMode:string,
-        public readonly importPath:string,
+        public readonly mpath:string,
         public readonly codepos: ErrorPosition|null,
         public readonly declaration:boolean)
     {
@@ -63,7 +63,7 @@ export class ImportInfo {
         type SerializedInfo = [string, string, boolean, number?, number?, number?, string?];
         const out:SerializedInfo[] = [];
         for (const info of imports){
-            const line:SerializedInfo = [info.apathOrExternalMode, info.importPath, info.declaration];
+            const line:SerializedInfo = [info.apathOrExternalMode, info.mpath, info.declaration];
             if (info.codepos !== null){
                 const pos = info.codepos;
                 line[3] = pos.line;
@@ -812,9 +812,8 @@ export class BundlerModule {
     private async _checkExternalChanges(refined:RefinedModule):Promise<boolean> {
         for (const imp of refined.imports) {
             if (imp.getExternalMode() !== ExternalMode.NoExternal) continue;
-            const mpath = this.makeImportModulePath(imp.importPath);
             for (const glob of this.bundler.externals) {
-                if (glob.test(mpath)) return true;
+                if (glob.test(imp.mpath)) return true;
             }
         }
         return false;
@@ -836,7 +835,7 @@ export class BundlerModule {
             if (mode !== ExternalMode.Preimport) {
                 continue;
             }
-            const id = this.bundler.getModuleId(imp.importPath, mode, null);
+            const id = this.bundler.getModuleId(imp.mpath, mode, null);
             if (imp.declaration) {
                 this.bundler.dtsPreloadModules.add(id);
             } else {

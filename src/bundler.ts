@@ -451,9 +451,9 @@ export class Bundler {
             for (const info of refined.imports) {
                 const mode = info.getExternalMode();
                 if (mode !== ExternalMode.NoExternal) {
-                    this.getModuleId(info.importPath, mode, null);
+                    this.getModuleId(info.mpath, mode, null);
                 } else {
-                    const mpath = module.makeImportModulePath(info.importPath);
+                    const mpath = info.mpath;
                     const childModule = this.getModule(info.apathOrExternalMode, mpath);
                     if (info.declaration) childModule.needDeclaration = true;
                     module.children.push(childModule);
