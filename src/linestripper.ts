@@ -8,20 +8,17 @@ export class LineStripper
 
     private noMoreStrip = false;
 
-    constructor(public readonly content:string)
-    {
+    constructor(public readonly content:string) {
     }
 
-    _strip(cb:(line:string)=>boolean):string|null
-    {
+    _strip(cb:(line:string)=>boolean):string|null {
         let idx = this.content.indexOf('\n', this.index);
         if (idx == -1) return null;
     
         let cr = 0;
         if (this.content.charAt(idx-1) === '\r') cr = 1;
         const actual = this.content.substring(this.index, idx-cr);
-        if (cb(actual))
-        {
+        if (cb(actual)) {
             this.stripedLine++;
             this.index = idx+1;
             return actual;
@@ -29,8 +26,7 @@ export class LineStripper
         return null;
     }
     
-    strip(cb:(line:string)=>boolean):string|null
-    {
+    strip(cb:(line:string)=>boolean):string|null {
         if (this.noMoreStrip) return null;
         let commentLine:string|null;
         while ((commentLine = this._strip(line=>{
@@ -38,8 +34,7 @@ export class LineStripper
             if (line === '') return true;
             if (line.startsWith('//')) return true;
 
-            if (line.startsWith('/*'))
-            {
+            if (line.startsWith('/*')) {
                 const commentOpen = this.content.indexOf('/*', this.index);
                 let commentClose = this.content.indexOf('*/', commentOpen+2);
                 if (commentClose === -1) return false;
@@ -57,12 +52,10 @@ export class LineStripper
                 return false;
             }
             return false;
-        })) !== null)
-        {
+        })) !== null) {
             this.strippedComments += commentLine+'\n';
         }
-        while (commentLine = this._strip(line=>/^var [,_a-z ]+;$/.test(line)))
-        {
+        while (commentLine = this._strip(line=>/^var [,_a-z ]+;$/.test(line))) {
             this.strippedComments += commentLine+'\n';
         }
         return this._strip(cb);

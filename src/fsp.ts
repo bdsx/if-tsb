@@ -13,52 +13,55 @@ function processMkdirError(dirname:string, err:any):boolean
     return false;
 }
 
-export namespace fsp
-{
-    export function unlink(path:string):Promise<void>
-    {
+export namespace fsp {
+    export let verbose = false;
+    export function unlink(path:string):Promise<void> {
+        if (verbose) console.log(`unlink ${path}`);
         return new Promise((resolve, reject)=>fs.unlink(path, (err)=>{
             if (err) reject(err);
             else resolve();
         }))
     }
-    export function mkdir(path:string):Promise<void>
-    {
+    export function mkdir(path:string):Promise<void> {
+        if (verbose) console.log(`mkdir ${path}`);
         return new Promise((resolve, reject)=>fs.mkdir(path, (err)=>{
             if (err) reject(err);
             else resolve();
         }))
     }
-    export function rmdir(path:string):Promise<void>
-    {
+    export function rmdir(path:string):Promise<void> {
+        if (verbose) console.log(`rmdir ${path}`);
         return new Promise((resolve, reject)=>fs.rmdir(path, (err)=>{
             if (err) reject(err);
             else resolve();
         }))
     }
-    export function readFile(path:string):Promise<string>
-    {
+    export function readFile(path:string):Promise<string> {
+        if (verbose) console.log(`readFile ${path}`);
         return new Promise((resolve, reject)=>fs.readFile(path, 'utf-8', (err, data)=>{
             if (err) reject(err);
             else resolve(data);
         }))
     }
-    export function writeFile(path:string, data:string):Promise<void>
-    {
+    export function writeFileSync(path:string, data:string):void {
+        fs.writeFileSync(path, data, 'utf-8');
+    }
+    export function writeFile(path:string, data:string):Promise<void> {
+        if (verbose) console.log(`writeFile ${path}`);
         return new Promise((resolve, reject)=>fs.writeFile(path, data, 'utf-8', (err)=>{
             if (err) reject(err);
             else resolve();
         }))
     }
-    export function stat(path:string):Promise<fs.Stats>
-    {
+    export function stat(path:string):Promise<fs.Stats> {
+        if (verbose) console.log(`stat ${path}`);
         return new Promise((resolve, reject)=>fs.stat(path, (err, data)=>{
             if (err) reject(err);
             else resolve(data);
         }))
     }
-    export function readdir(path:string):Promise<string[]>
-    {
+    export function readdir(path:string):Promise<string[]> {
+        if (verbose) console.log(`readdir ${path}`);
         return new Promise((resolve, reject)=>fs.readdir(path, (err, out)=>{
             if (err) reject(err);
             else resolve(out);
@@ -72,13 +75,12 @@ export namespace fsp
         let index = dirpath.indexOf(sep)+1;
         if (index === 0) return;
 
-        for (;;)
-        {
+        for (;;) {
             const nextsep = dirpath.indexOf(sep, index);
             if (nextsep === -1)
             {
                 try {
-                    await fsp.mkdir(dirpath);
+                    await mkdir(dirpath);
                 } catch (err) {
                     if (!processMkdirError(dirpath, err))
                     {
@@ -90,7 +92,7 @@ export namespace fsp
             index = nextsep+1;
             const dirname = dirpath.substr(0, nextsep);
             try {
-                await fsp.mkdir(dirname);
+                await mkdir(dirname);
             } catch (err) {
                 if (!processMkdirError(dirname, err))
                 {
@@ -101,66 +103,59 @@ export namespace fsp
             }
         }
     }
-    export async function deleteAll(filepath:string):Promise<number>
-    {
+    export async function deleteAll(filepath:string):Promise<number> {
         let count = 0;
-        try
-        {
-            const stat = await fsp.stat(filepath);
-            if (stat.isDirectory())
-            {
-                for (const file of await readdir(filepath))
-                {
+        try {
+            const stats = await stat(filepath);
+            if (stats.isDirectory()) {
+                for (const file of await readdir(filepath)) {
                     count += await deleteAll(path.join(filepath, file));
                 }
-                await fsp.rmdir(filepath);
-            }
-            else
-            {
-                await fsp.unlink(filepath);
+                await rmdir(filepath);
+            } else {
+                await unlink(filepath);
             }
             count++;
-        }
-        catch (err)
-        {
+        } catch (err) {
         }
         return count;
     }
-}
-
-export function mkdirRecursiveSync(dirpath:string):void {
-    const sep = path.sep;
-    dirpath = path.resolve(dirpath);
-    
-    let index = dirpath.indexOf(sep)+1;
-    if (index === 0) return;
-    
-    for (;;)
-    {
-        const nextsep = dirpath.indexOf(sep, index);
-        if (nextsep === -1)
-        {
-            try {
-                fs.mkdirSync(dirpath);
-            } catch (err) {
-                if (!processMkdirError(dirpath, err))
-                {
-                    throw err;
+        
+    export function mkdirRecursiveSync(dirpath:string):void {
+        const sep = path.sep;
+        dirpath = path.resolve(dirpath);
+        
+        let index = dirpath.indexOf(sep)+1;
+        if (index === 0) return;
+        
+        for (;;) {
+            const nextsep = dirpath.indexOf(sep, index);
+            if (nextsep === -1) {
+                try {
+                    if (verbose) console.log(`mkdirSync ${dirpath}`);
+                    fs.mkdirSync(dirpath);
+                } catch (err) {
+                    if (!processMkdirError(dirpath, err))
+                    {
+                        throw err;
+                    }
                 }
+                break;
             }
-            break;
-        }
-        index = nextsep+1;
-        const dirname = dirpath.substr(0, nextsep);
-        try {
-            fs.mkdirSync(dirname);
-        } catch (err) {
-            if (!processMkdirError(dirname, err))
-            {
-                if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
-                    throw err;
+            index = nextsep+1;
+            const dirname = dirpath.substr(0, nextsep);
+            try {
+                if (verbose) console.log(`mkdirSync ${dirname}`);
+                fs.mkdirSync(dirname);
+            } catch (err) {
+                if (!processMkdirError(dirname, err))
+                {
+                    if (['EACCES', 'EPERM', 'EISDIR'].indexOf(err.code) === -1) {
+                        throw err;
+                    }
                 }
             }
         }
     }
 }
+

@@ -1,11 +1,7 @@
 
 import ts = require('typescript');
-import os = require('os');
-import fs = require('fs');
 import path = require('path');
-
-export const cpuCount = os.cpus().length;
-const concurrencyCount = Math.min(Math.max(cpuCount*2, 8), cpuCount);
+import { PhaseListener, TsConfig } from './types';
 
 export const resolved = Promise.resolve();
 
@@ -45,7 +41,6 @@ export function printNode(node:ts.Node, name:string, tab:string):void
         printNode((nodes as any)[key], key, tab);
     }
 }
-
 
 /**
  * const [a,b] = splitContent('a,b,b', 2, ',')
@@ -129,135 +124,33 @@ export function count(content:string, chr:string):number
     return count;
 }
 
-const EMPTY = {};
-
-export class ConcurrencyQueue
-{
-    private idles:number;
-    private readonly reserved:(()=>Promise<void>)[] = [];
-    private endResolve:(()=>void)|null = null;
-    private endReject:((err:any)=>void)|null = null;
-    private endPromise:Promise<void>|null = null;
-    private idleResolve:(()=>void)|null = null;
-    private idleReject:((err:any)=>void)|null = null;
-    private idlePromise:Promise<void>|null = null;
-    private _ref = 0;
-    private _error:any = EMPTY;
-    public verbose = false;
-
-    constructor(public readonly name:string, private readonly concurrency = concurrencyCount) {
-        this.idles = this.concurrency;
-    }
-
-    private readonly _next:()=>(Promise<void>|void) = ()=>{
-        if (this.verbose) console.log(`${this.name} - ${'*'.repeat(this.getTaskCount())}`);
-
-        if (this.reserved.length === 0)
-        {
-            if (this.idles === 0 && this.idleResolve !== null)
-            {
-                this.idleResolve();
-                this.idleResolve = null;
-                this.idleReject = null;
-                this.idlePromise = null;                
-            }
-            this.idles++;
-            this._fireEnd();
-            return;
-        }
-        const task = this.reserved.shift()!;
-        return task().then(this._next, err=>this.error(err));
-    };
-
-    private _fireEnd():void
-    {
-        if (this._ref === 0 && this.idles === this.concurrency)
-        {
-            if (this.endResolve !== null)
-            {
-                if (this.verbose) console.log(`${this.name} - End`);
-                this.endResolve();
-                this.endResolve = null;
-                this.endReject = null;
-                this.endPromise = null;
-            }
+type Task = (()=>Promise<any>)|Promise<void>|null;
+type TaskToResult<T> = T extends ()=>Promise<infer R> ? R : T extends Promise<infer R> ? R : T;
+type TasksToResults<T extends Task[]> = {[key in keyof T] : TaskToResult<T[key]>};
+export function concurrent<PROMS extends Task[]>(...funcs:PROMS):Promise<TasksToResults<PROMS>> {
+    const proms:Promise<any>[] = [];
+    for (const func of funcs) {
+        if (func === null) continue;
+        if (func instanceof Promise) {
+            proms.push(func);
+        } else {
+            proms.push(func());
         }
     }
+    return Promise.all(proms) as any;
+}
 
-    error(err:any):void
-    {
-        this._error = err;
-        if (this.endReject !== null)
-        {
-            this.endReject(err);
-            this.endResolve = null;
-            this.endReject = null;
-        }
-        if (this.idleReject !== null)
-        {
-            this.idleReject(err);
-            this.idleResolve = null;
-            this.idleReject = null;
-        }
-        this.idlePromise = this.endPromise = Promise.reject(this._error);
+function runTasks(tasks:((()=>Promise<void>))[]):Promise<unknown> {
+    const proms:Promise<void>[] = [];
+    for (const task of tasks) {
+        proms.push(task());
     }
-
-    ref():void
-    {
-        this._ref++;
-    }
-
-    unref():void
-    {
-        this._ref--;
-        this._fireEnd();
-    }
-
-    onceHasIdle():Promise<void>
-    {
-        if (this.idlePromise !== null) return this.idlePromise;
-        if (this.idles !== 0) return resolved;
-        return this.idlePromise = new Promise((resolve, reject)=>{
-            this.idleResolve = resolve;
-            this.idleReject = reject;
-        });
-    }
-
-    onceEnd():Promise<void>
-    {
-        if (this.endPromise !== null) return this.endPromise;
-        if (this.idles === this.concurrency) return resolved;
-        return this.endPromise = new Promise((resolve, reject)=>{
-            this.endResolve = resolve;
-            this.endReject = reject;
-        });
-    }
-
-    run(task:()=>Promise<void>):Promise<void>
-    {
-        this.reserved.push(task);
-        if (this.idles === 0) {
-            if (this.verbose) console.log(`${this.name} - ${'*'.repeat(this.getTaskCount())}`);
-
-            if (this.reserved.length > (this.concurrency>>1)) {
-                if (this.verbose) console.log(`${this.name} - Drain`);
-                return this.onceHasIdle();
-            }
-            return resolved;
-        }
-        this.idles--;
-        this._next();
-        return resolved;
-    }
-
-    getTaskCount():number {
-        return this.reserved.length + this.concurrency - this.idles;
-    }
+    return (proms.length === 1 ? proms[0] : Promise.all(proms));
 }
 
 export class SkipableTaskQueue
 {
-    private reserved:(()=>Promise<void>)|null = null;
+    private reserved:(()=>Promise<void>)[]|null = null;
     private processing = false;
     private endResolve:(()=>void)|null = null;
     private endReject:((err:any)=>void)|null = null;
@@ -266,7 +159,7 @@ export class SkipableTaskQueue
     private readonly _continue = ()=>{
         if (this.reserved !== null)
         {
-            this.reserved().then(this._continue, err=>{ 
+            runTasks(this.reserved).then(this._continue, err=>{ 
                 this.err = err; 
                 if (this.endReject !== null)
                 {
@@ -303,16 +196,16 @@ export class SkipableTaskQueue
         return this.endPromise;
     }
 
-    run(task:()=>Promise<void>):void
+    run(...tasks:((()=>Promise<void>))[]):void
     {
         if (this.processing)
         {
-            this.reserved = task;
+            this.reserved = tasks;
         }
         else
         {
             this.processing = true;
-            task().then(this._continue);
+            runTasks(tasks).then(this._continue);
         }
     }
 }
@@ -414,31 +307,36 @@ const lastIndexOfSep:(path:string, offset?:number)=>number = path.sep === '/' ?
 
 
 export function dirnameModulePath(path:string):string {
+    if (path === '') throw Error('cannot get empty path of directory');
+
     let p = path.length-1;
     for (;;) {
-        const idx = lastIndexOfSep(path, p)+1;
+        const lastIdx = lastIndexOfSep(path, p);
+        if (lastIdx === -1) {
+            if (path === '.') return '..';
+            return path+'/..';
+        }
+        const idx = lastIdx+1;
         switch (path.substr(idx)) {
         case '':
         case '.':
-            p = idx-1;
+            p = lastIdx-1;
             continue;
         case '..': return path + '/..';
-        default: return path.substr(0, idx);
+        default: return path.substr(0, lastIdx);
         }
     }
 }
-export function joinModulePath(...pathes:string[]):string
-{
+
+export function joinModulePath(...pathes:string[]):string {
     const out:string[] = [];
     let backcount = 0;
 
     let absolute:string|null = null;
-    for (const child of pathes)
-    {
+    for (const child of pathes) {
         let prev = 0;
 
-        if (!child.startsWith('.'))
-        {
+        if (!child.startsWith('.')) {
             out.length = 0;
             backcount = 0;
             const sepidx = indexOfSep(child, prev);
@@ -447,17 +345,14 @@ export function joinModulePath(...pathes:string[]):string
             prev = sepidx + 1;
         }
 
-        for (;;)
-        {
-            const dot = indexOfSep(child, prev);
-            const partname = (dot === -1) ? child.substr(prev) : child.substring(prev, dot);
-            switch (partname)
-            {
+        for (;;) {
+            const sepidx = indexOfSep(child, prev);
+            const partname = (sepidx === -1) ? child.substr(prev) : child.substring(prev, sepidx);
+            switch (partname) {
             case '.': break;
             case '': break;
             case '..':
-                if (!out.pop())
-                {
+                if (out.pop() == null) {
                     backcount++;
                 }
                 break;
@@ -465,18 +360,71 @@ export function joinModulePath(...pathes:string[]):string
                 out.push(partname);
                 break;
             }
-            if (dot === -1) break;
-            prev = dot + 1;
+            if (sepidx === -1) break;
+            prev = sepidx + 1;
         }
     }
     let outstr = '';
     if (absolute !== null) outstr += absolute + '/';
-    if (backcount === 0)
-    {
+    if (backcount === 0) {
         if (absolute === null) outstr += './';
+    } else {
+        outstr += '../'.repeat(backcount);
     }
-    else outstr += '../'.repeat(backcount);
     
     if (out.length === 0) return outstr.substr(0, outstr.length-1);
     else return outstr + out.join('/');
+}
+
+export function makeImportModulePath(baseMPath:string, baseAPath:string, importPath:string):string {
+    let out:string;
+    if (!baseMPath.endsWith('/index') && path.parse(baseAPath).name === 'index') {
+        out = joinModulePath(baseMPath, importPath);
+    } else {
+        const dirmodule = dirnameModulePath(baseMPath);
+        out = joinModulePath(dirmodule, importPath);
+    }
+    return out;
+}
+
+export function tsbuild(tsconfig:TsConfig, basedir:string):void {
+    const parsed = ts.parseJsonConfigFileContent(tsconfig, ts.sys, basedir);
+    const program = ts.createProgram(parsed.fileNames, parsed.options);
+    const emitResult = program.emit();
+    const allDiagnostics = ts.getPreEmitDiagnostics(program).concat(emitResult.diagnostics);
+    if (allDiagnostics.length !== 0) {
+        console.error(ts.formatDiagnosticsWithColorAndContext(allDiagnostics, defaultFormatHost));
+    }
+}
+
+export function tswatch(tsconfig:TsConfig, basedir:string, opts:PhaseListener = {}):void {
+    const parsed = ts.parseJsonConfigFileContent(tsconfig, ts.sys, path.resolve(basedir));
+    printDiagnostrics(parsed.errors);
+    const host = ts.createWatchCompilerHost(
+        parsed.fileNames,
+        parsed.options,
+        ts.sys,
+        ts.createSemanticDiagnosticsBuilderProgram,
+        diagnostic=>printDiagnostrics([diagnostic]),
+        diagnostic=>{
+            switch (diagnostic.code) {
+            case 6031: // start
+            case 6032: // change
+                if (opts.onStart != null) opts.onStart();
+                break;
+            }
+            printDiagnostrics([diagnostic]);
+            if (diagnostic.code === 6194) { // finish
+                if (opts.onFinish != null) opts.onFinish();
+            }
+        },
+        parsed.projectReferences,
+        parsed.watchOptions,
+    );
+    ts.createWatchProgram(host);
+}
+
+export function printDiagnostrics(diagnostics:readonly ts.Diagnostic[]):void {
+    if (diagnostics.length === 0) return;
+    console.error(ts.formatDiagnosticsWithColorAndContext(diagnostics, defaultFormatHost));
 }

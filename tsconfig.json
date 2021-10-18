@@ -2,10 +2,12 @@
     "entry": {
         "./src/cli.ts": "./cli.bundle.js",
         "./src/index.ts": "./index.bundle.js",
-        "./src/sourcemap-worker.ts": "./worker.bundle.js"
+        "./src/sourcemap-worker.ts": "./worker.bundle.js",
+        "./src/ts-worker.ts": "./tsworker.bundle.js"
     },
     "bundlerOptions": {
-        "verbose": true
+        "verbose": true,
+        "noSourceMapWorker": true
     },
     "compilerOptions": {
         "target": "ES2015",

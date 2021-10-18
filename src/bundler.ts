@@ -1,77 +1,30 @@
 import ts = require("typescript");
 import path = require("path");
 import fs = require("fs");
-import glob = require('glob');
 import { identifierValidating } from "./checkvar";
+import { ConcurrencyQueue } from "./concurrent";
 import { BundlerMainContext } from "./context";
+import { CounterLock } from "./counterlock";
+import { fsp } from "./fsp";
+import { CacheMap } from "./memmgr";
 import { BundlerModule, BundlerModuleId, CheckState, memoryCache, RefinedModule } from "./module";
-import { SourceMap } from "./sourcemap";
-import { WriterStream as FileWriter } from './streamwriter';
+import { SourceFileCache } from "./sourcefilecache";
+import { SourceMap, SourceMapDirect } from "./sourcemap";
+import { WriterStream as FileWriter, WriterStream } from './streamwriter';
 import { ExportRule, ExternalMode, IfTsbError, TsConfig } from "./types";
-import { ConcurrencyQueue, getScriptKind, parsePostfix, resolved, splitContent } from "./util";
+import { changeExt, concurrent, getScriptKind, parsePostfix, splitContent } from "./util";
+import { ValueLock } from "./valuelock";
 import globToRegExp = require('glob-to-regexp');
 import colors = require('colors');
-import { fsp } from "./fsp";
-
-class WritingLock {
-    
-    private readonly writingProm:Promise<FileWriter>|null = null;
-    private csResolve:(()=>void)[] = [];
-    private csEntered = false;
-    
-    public resolveWriter:(writer:FileWriter)=>void;
-
-    constructor(public readonly main:BundlerMainContext) {
-        this.writingProm = new Promise(resolve=>{
-            this.resolveWriter = resolve;
-        });
-    }
-
-    lockWithoutWriter():Promise<void>
-    {
-        if (!this.csEntered)
-        {
-            this.csEntered = true;
-            return resolved;
-        }
-        return new Promise<void>(resolve=>{
-            this.csResolve.push(resolve);
-        });
-    }
-    
-    async lock():Promise<FileWriter>
-    {
-        const writer = await this.writingProm!;
-        await this.lockWithoutWriter();
-        return writer;
-    }
-
-    unlock():void
-    {
-        if (this.csResolve.length === 0)
-        {
-            if (this.csEntered)
-            {
-                this.csEntered = false;
-                return;
-            }
-            this.main.reportMessage(IfTsbError.InternalError, 'unlock more than lock');
-            return;
-        }
-        const resolve = this.csResolve.pop()!;
-        resolve();
-    }
-
-}
 
 const libmap = new Map<string, Bundler>();
+type WritingLock = ValueLock<[FileWriter, FileWriter|null]>;
 
-export class Bundler
-{
+export class Bundler {
     private readonly names = new Map<string, BundlerModuleId>();
 
     private mapgen:SourceMap|null = null;
-    private lineOffset = 0;
+    private sourceMapLineOffset = 0;
     public entryModuleIsAccessed = false;
 
     private lock:WritingLock|null = null;
@@ -81,7 +34,6 @@ export class Bundler
     public readonly globalVarName:string;
     public readonly clearConsole:boolean;
     public readonly watchWaiting:number|undefined;
-    public readonly verbose:boolean;
     public readonly checkCircularDependency:boolean;
     public readonly suppressDynamicImportErrors:boolean;
     public readonly faster:boolean;
@@ -93,19 +45,28 @@ export class Bundler
     public readonly exportVarName:string|null = null;
     public readonly needWrap:boolean;
     public readonly exportLib:boolean;
+    public readonly declaration:boolean;
+    public readonly verbose:boolean;
 
     private readonly moduleByName = new Map<string, BundlerModule>();
     public readonly deplist:string[] = [];
     public readonly taskQueue:ConcurrencyQueue;
-    private readonly sourceFileCache = new Map<string, ts.SourceFile>();
     public readonly tsconfigMtime:number;
     public readonly moduleResolutionCache:ts.ModuleResolutionCache;
     public readonly sys:ts.System;
     public readonly compilerHost:ts.CompilerHost;
     public readonly constKeyword:string;
     public readonly preimportTargets:Set<string>;
+    public readonly noSourceMapWorker:boolean;
+    public readonly jsPreloadModules = new Set<BundlerModuleId>();
+    public readonly dtsPreloadModules = new Set<BundlerModuleId>();
     private readonly cache:Record<string, BundlerModuleId>;
+    public readonly sourceFileCache:SourceFileCache;
     private readonly entryApath:string|null = null;
+    private readonly inlineSourceMap:boolean;
+    private writingCounter = new CounterLock;
+
+    public program:ts.Program|undefined;
 
     constructor(
         public readonly main:BundlerMainContext,
@@ -115,20 +76,15 @@ export class Bundler
         entry:string|null,
         private readonly files:string[],
         public readonly tsconfig:string|null,
-        public readonly tsoptions:ts.CompilerOptions)
-    {
+        public readonly tsoptions:ts.CompilerOptions) {
         this.cache = main.getCacheMap(resolvedOutput);
 
-        if (this.tsoptions.target === undefined)
-        {
+        if (this.tsoptions.target === undefined) {
             this.tsoptions.target = ts.ScriptTarget.ES3;
         }
-        if (this.tsoptions.target >= ts.ScriptTarget.ES2015)
-        {
+        if (this.tsoptions.target >= ts.ScriptTarget.ES2015) {
             this.constKeyword = 'const';
-        }
-        else
-        {
+        } else {
             this.constKeyword = 'var';
         }
         delete this.tsoptions.outFile;
@@ -137,14 +93,21 @@ export class Bundler
         this.tsoptions.allowJs = true;
         this.tsoptions.outDir = '/.if-tsb';
 
+        if (this.tsoptions.inlineSourceMap) {
+            this.inlineSourceMap = true;
+            this.tsoptions.inlineSourceMap = false;
+            this.tsoptions.sourceMap = true;
+        } else {
+            this.inlineSourceMap = false;
+        }
+
         const that = this;
-        this.sys = {
+        this.sys = Object.setPrototypeOf({
             getCurrentDirectory():string
             {
                 return that.basedir;
             },
-            directoryExists(filepath:string):boolean
-            {
+            directoryExists(filepath:string):boolean {
                 try
                 {
                     const stat = fs.statSync(that.resolvePath(filepath));
@@ -159,27 +122,24 @@ export class Bundler
             {
                 return fs.existsSync(that.resolvePath(filepath));
             },
-        } as any;
-        Object.setPrototypeOf(this.sys, ts.sys);
+        }, ts.sys);
 
         this.compilerHost = ts.createCompilerHost(this.tsoptions);
-        this.compilerHost.getCurrentDirectory = function() { return that.sys.getCurrentDirectory(); },
-        this.compilerHost.readFile = function(fileName:string) { return that.sys.readFile(fileName); },
-        this.compilerHost.directoryExists = function(dirName:string) { return that.sys.directoryExists(dirName); },
-        this.compilerHost.getDirectories = function(dirName:string) { return that.sys.getDirectories(dirName); }
+        this.compilerHost.getCurrentDirectory = ()=>this.sys.getCurrentDirectory();
+        this.compilerHost.readFile = fileName=>this.sys.readFile(fileName);
+        this.compilerHost.directoryExists = dirName=>this.sys.directoryExists(dirName);
+        this.compilerHost.getDirectories = dirName=>this.sys.getDirectories(dirName);
 
-        if (tsconfig !== null)
-        {
+        if (tsconfig !== null) {
             this.tsconfigMtime = +fs.statSync(tsconfig).mtime;
-        }
-        else
-        {
+        } else {
             this.tsconfigMtime = 0;
         }
         this.output = resolvedOutput;
         this.outdir = path.dirname(this.output);
         const boptions = options.bundlerOptions || {};
 
+        this.verbose = !!boptions.verbose;
         this.globalVarName = (boptions.globalModuleVarName || '__tsb').toString();
         this.clearConsole = !!boptions.clearConsole;
         this.checkCircularDependency = !!boptions.checkCircularDependency;
@@ -189,16 +149,17 @@ export class Bundler
         this.bundleExternals = !!boptions.bundleExternals;
         this.externals = boptions.externals instanceof Array ? boptions.externals.map(glob=>globToRegExp(glob)) : [];
         this.preimportTargets = boptions.preimport instanceof Array ? new Set(boptions.preimport) : new Set;
+        this.noSourceMapWorker = !! boptions.noSourceMapWorker;
         this.preimportTargets.add('tslib');
+        this.preimportTargets.add('path');
         this.exportLib = !!boptions.exportLib;
+        this.declaration = !!tsoptions.declaration;
 
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
-        if (boptions.module === undefined)
-        {
+        this.sourceFileCache = SourceFileCache.getInstance(tsoptions.target!);
+        if (boptions.module === undefined) {
             this.exportRule = ExportRule.None;
-        }
-        else
-        {
+        } else {
             const exportRule = (boptions.module+'').toLowerCase();
             switch (exportRule)
             {
@@ -264,47 +225,49 @@ export class Bundler
             }
         }
         this.taskQueue = new ConcurrencyQueue(path.basename(this.entryApath || this.basedir) + ' Task', Number(boptions.concurrency) || undefined);
-        this.taskQueue.verbose = this.verbose = !!boptions.verbose;
+        if (this.verbose) {
+            CacheMap.verbose = true;
+            ConcurrencyQueue.verbose = true;
+        }
     }
 
-    getModuleId(apath:string, mode:ExternalMode, forceModuleName:string|null):BundlerModuleId
-    {
+    getModuleId(apath:string, mode:ExternalMode, forceModuleName:string|null):BundlerModuleId {
         let id = this.cache[apath];
-        if (id === undefined)
-        {
+        if (id === undefined) {
             id = {
                 number: mode === ExternalMode.NoExternal ? this.main.allocateCacheId() : mode,
                 apath,
                 varName: ''
             };
-            if (mode === ExternalMode.Manual)
-            {
+            if (mode === ExternalMode.Manual) {
                 forceModuleName = apath;
             }
-            if (forceModuleName !== null)
-            {
+            if (forceModuleName !== null) {
                 id.varName = forceModuleName;
-                this.addModuleVarName(id);
-            }
-            else
-            {
+                const old = this.addModuleVarName(id);
+                if (old !== null) {
+                    this.main.reportMessage(IfTsbError.InternalError, `Module name dupplicated: ${old.varName}`);
+                }
+            } else {
                 let varName = path.basename(apath);
                 const dotidx = varName.lastIndexOf('.');
                 if (dotidx !== -1) varName = varName.substr(0, dotidx);
-                if (varName === 'index')
-                {
+                if (varName === 'index') {
                     varName = path.basename(path.dirname(apath));
                 }
                 this.allocModuleVarName(id, varName);
             }
             this.cache[apath] = id;
             this.main.cacheJsonModified = true;
+        } else {
+            if (id.number < 0 && id.number !== mode) {
+                this.main.reportMessage(IfTsbError.InternalError, `module type mismatch (${id.number} -> ${mode})`);
+            }
         }
         return id;
     }
 
-    deleteModuleId(apath:string):boolean
-    {
+    deleteModuleId(apath:string):boolean {
         const id = this.cache[apath];
         if (!id) return false;
         delete this.cache[apath];
@@ -313,46 +276,19 @@ export class Bundler
         return true;
     }
 
-    resolvePath(filepath:string):string
-    {
+    resolvePath(filepath:string):string {
         return path.isAbsolute(filepath) ? path.join(filepath) : path.join(this.basedir, filepath);
     }
 
-    async getSourceFile(filepath:string):Promise<ts.SourceFile>
-    {
-        let sourceFile = this.sourceFileCache.get(filepath);
-        if (sourceFile) return sourceFile;
-        
-        const source = await fsp.readFile(filepath);
-        sourceFile = ts.createSourceFile(filepath, source, this.tsoptions.target!);
-        this.sourceFileCache.set(filepath, sourceFile);
-        
-        return sourceFile;
-    }
-
-    getSourceFileSync(filepath:string, languageVersion?: ts.ScriptTarget):ts.SourceFile|undefined
-    {
-        let sourceFile = this.sourceFileCache.get(filepath);
-        if (sourceFile) return sourceFile;
-        const source = fs.readFileSync(filepath, 'utf-8');
-        sourceFile = ts.createSourceFile(filepath, source, languageVersion || this.tsoptions.target!);
-        this.sourceFileCache.set(filepath, sourceFile);
-
-        return sourceFile;
-    }
-
-    addModuleVarName(module:BundlerModuleId):BundlerModuleId|null
-    {
+    addModuleVarName(module:BundlerModuleId):BundlerModuleId|null {
         const old = this.names.get(module.varName);
         this.names.set(module.varName, module);
         return old || null;
     }
 
-    allocModuleVarName(module:BundlerModuleId, name:string):void
-    {
+    allocModuleVarName(module:BundlerModuleId, name:string):void {
         name = identifierValidating(name);
-        if (this.names.has(name))
-        {
+        if (this.names.has(name)) {
             const base = name;
             let num = 2;
             for (;;)
@@ -366,146 +302,163 @@ export class Bundler
         module.varName = name;
     }
 
-    deleteModuleVarName(name:string):boolean
-    {
+    deleteModuleVarName(name:string):boolean {
         return this.names.delete(name);
     }
     
-    async write(lock:WritingLock, module:BundlerModule, refined:RefinedModule):Promise<void>
-    {
-        const writer = await lock.lock();
+    async write(lock:WritingLock, module:BundlerModule, refined:RefinedModule):Promise<void> {
+        const [jsWriter, dtsWriter] = await lock.lock();
         if (this.verbose) console.log(refined.id.apath+': writing');
-        try
-        {
-            await writer.write(refined.content);
-        }
-        finally
-        {
+        try {
+            await concurrent(
+                jsWriter.write(refined.content), 
+                dtsWriter !== null && module.needDeclaration && refined.declaration !== null ? dtsWriter.write(refined.declaration) : null
+            );
+        } finally {
             if (this.verbose) console.log(refined.id.apath+': writing end');
             lock.unlock();
         }
-        const offset = this.lineOffset + refined.sourceMapOutputLineOffset;
-        this.lineOffset += refined.outputLineCount;
+        const offset = this.sourceMapLineOffset + refined.sourceMapOutputLineOffset;
+        this.sourceMapLineOffset += refined.outputLineCount;
 
-        if (refined.sourceMapText)
-        {
-            try
-            {
+        if (refined.sourceMapText) {
+            try {
                 this.mapgen!.append(refined.id.apath, refined.sourceMapText, offset);
-            }
-            catch (err)
-            {
+            } catch (err) {
                 module.error(null, IfTsbError.InternalError, `Invalid source map (${refined.sourceMapText.substr(0, 16)})`);
             }
         }
     }
 
-    private async _startWrite(lock:WritingLock, firstLineComment:string|null):Promise<FileWriter> {
-        
+    private async _startWrite(lock:WritingLock, firstLineComment:string|null):Promise<[FileWriter, FileWriter|null]> {
         await fsp.mkdirRecursive(this.outdir);
         
         await lock.lockWithoutWriter();
-        try
-        {
-            const writer = new FileWriter(this.output);
-            if (firstLineComment !== null)
-            {
-                await writer.write(firstLineComment+'\n');
-                this.lineOffset++;
-            }
-            if (this.tsoptions.alwaysStrict)
-            {
-                await writer.write('"use strict";\n');
-                this.lineOffset++;
-            }
-            if (this.exportLib) {
-                if (this.exportRule === ExportRule.ES2015) {
-                    await writer.write(`export const ${this.globalVarName} = {\n`);
-                    this.lineOffset++;
-                } else if (this.exportRule === ExportRule.Direct) {
-                    await writer.write(`${this.exportVarName}.${this.globalVarName} = {\n`);
-                    this.lineOffset++;
-                } else if (this.exportRule === ExportRule.Var) {
-                    await writer.write(`${this.exportVarKeyword} ${this.globalVarName} = {\n`);
-                    this.lineOffset++;
+        let jsWriter:FileWriter|undefined;
+        let dtsWriter:FileWriter|null = null as any;
+        try {
+            await concurrent(async()=>{
+                jsWriter = new FileWriter(this.output);
+                if (firstLineComment !== null) {
+                    await jsWriter.write(firstLineComment+'\n');
+                    this.sourceMapLineOffset++;
+                }
+                if (this.tsoptions.alwaysStrict) {
+                    await jsWriter.write('"use strict";\n');
+                    this.sourceMapLineOffset++;
+                }
+                if (this.exportLib) {
+                    if (this.exportRule === ExportRule.ES2015) {
+                        await jsWriter.write(`export const ${this.globalVarName} = {\n`);
+                        this.sourceMapLineOffset++;
+                    } else if (this.exportRule === ExportRule.Direct) {
+                        await jsWriter.write(`${this.exportVarName}.${this.globalVarName} = {\n`);
+                        this.sourceMapLineOffset++;
+                    } else if (this.exportRule === ExportRule.Var) {
+                        await jsWriter.write(`${this.exportVarKeyword} ${this.globalVarName} = {\n`);
+                        this.sourceMapLineOffset++;
+                    } else {
+                        await jsWriter.write(`${this.constKeyword} ${this.globalVarName} = {\n`);
+                        this.sourceMapLineOffset++;
+                    }
                 } else {
-                    await writer.write(`${this.constKeyword} ${this.globalVarName} = {\n`);
-                    this.lineOffset++;
+                    if (this.needWrap) {
+                        let assign = '';
+                        if (this.exportRule === ExportRule.Var) {
+                            assign = `${this.exportVarKeyword} ${this.exportVarName}=`;
+                        }
+                        if (this.tsoptions.target! >= ts.ScriptTarget.ES2015) {
+                            await jsWriter.write(`${assign}(()=>{\n`);
+                        } else {
+                            await jsWriter.write(`${assign}(function(){\n`);
+                        }
+                        this.sourceMapLineOffset++;
+                    }
+                    await jsWriter.write(`${this.constKeyword} ${this.globalVarName} = {\n`);
+                    this.sourceMapLineOffset++;
                 }
-            } else {
-                if (this.needWrap) {
-                    let assign = '';
-                    if (this.exportRule === ExportRule.Var)
-                    {
-                        assign = `${this.exportVarKeyword} ${this.exportVarName}=`;
+            }, async()=>{
+                if (!this.declaration) return;
+                dtsWriter = new FileWriter(changeExt(this.output, 'd.ts'));
+                if (this.exportLib) {
+                    if (this.exportRule === ExportRule.ES2015) {
+                        await dtsWriter.write(`export namespace ${this.globalVarName} {\n`);
+                    } else if (this.exportRule === ExportRule.Direct) {
+                        await dtsWriter.write(`declare namespace ${this.globalVarName} {\n`);
+                    } else if (this.exportRule === ExportRule.Var) {
+                        await dtsWriter.write(`declare global {\nnamespace ${this.globalVarName} {\n`);
+                    } else {
+                        await dtsWriter.write(`declare namespace ${this.globalVarName} {\n`);
                     }
-                    if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
-                    {
-                        await writer.write(`${assign}(()=>{\n`);
+                } else {
+                    if (this.needWrap) {
+                        if (this.exportRule === ExportRule.Var) {
+                            await dtsWriter.write(`declare global {\nnamespace ${this.exportVarName} {\n`);
+                        } else {
+                            // no declaration
+                        }
                     }
-                    else
-                    {
-                        await writer.write(`${assign}(function(){\n`);
-                    }
-                    this.lineOffset++;
+                    await dtsWriter.write(`declare namespace ${this.globalVarName} {\n`);
                 }
-                await writer.write(`${this.constKeyword} ${this.globalVarName} = {\n`);
-                this.lineOffset++;
-            }
-            return writer;
-        }
-        finally
-        {
+            });
+        } finally {
             lock.unlock();
         }
+        const res:[WriterStream, WriterStream|null] = [jsWriter!, dtsWriter];
+        lock.resolveWriter(res);
+        return res;
     }
 
-    append(lock:WritingLock, module:BundlerModule):void {
+    async append(lock:WritingLock, module:BundlerModule):Promise<void> {
         if (module.isAppended) return;
         module.isAppended = true;
         if (module.isEntry) {
             this.entryModuleIsAccessed = true;
             return;
         }
-        this.taskQueue.run(async()=>{
-            if (this.verbose) console.log(module.id.apath+': refine');
-            const refined = await module.refine();
-            if (refined === null) {
-                module.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${module.mpath}'`);
-                try {
-                    const writer = await lock.lock();
-                    await writer.write(`${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); }\n`);
-                } finally {
-                    lock.unlock();
-                }
-                return;
-            }
-            this.deplist.push(module.id.apath);
-            this._appendChildren(lock, module, refined);
 
-            await this.write(lock, module, refined);
-            if (!refined.errored) {
-                memoryCache.put(refined.id.number, refined);
-            }
+        this.writingCounter.increase();
+        await this.taskQueue.run(module.id.varName, async()=>{
+            const startTime = Date.now();
+            const tooLongTimer = setInterval(()=>{
+                this.main.reportMessage(IfTsbError.TooSlow, `${Date.now()-startTime}ms for compiling ${module.id.apath}`, true);
+            }, 5000);
+            const refined = await module.refine();
+            clearInterval(tooLongTimer);
+            (async()=>{
+                if (refined === null) {
+                    module.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${module.mpath}'`);
+                    try {
+                        const [jsWriter, dtsWriter] = await lock.lock();
+                        await jsWriter.write(`${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); }\n`);
+                    } finally {
+                        lock.unlock();
+                    }
+                } else {
+                    this.deplist.push(module.id.apath);
+                    this._appendChildren(lock, module, refined);
+                    await this.write(lock, module, refined);
+                    if (!refined.errored) {
+                        memoryCache.release(refined.id.number, refined);
+                    }
+                }
+                this.writingCounter.decrease();
+            })();
         });
     }
         
-    private _appendChildren(lock:WritingLock, module:BundlerModule, refined:RefinedModule):void
-    {
-        if (module.children.length === 0)
-        {
+    private _appendChildren(lock:WritingLock, module:BundlerModule, refined:RefinedModule):void {
+        if (module.children.length === 0) {
             module.importLines.length = 0;
 
-            for (const info of refined.imports)
-            {
+            for (const info of refined.imports) {
                 const mode = info.getExternalMode();
-                if (mode !== null)
-                {
-                    this.getExternal(info.mpath, mode);
-                }
-                else
-                {
-                    const childModule = this.getModule(info.apath, info.mpath);
+                if (mode !== ExternalMode.NoExternal) {
+                    this.getModuleId(info.importPath, mode, null);
+                } else {
+                    const mpath = module.makeImportModulePath(info.importPath);
+                    const childModule = this.getModule(info.apathOrExternalMode, mpath);
+                    if (info.declaration) childModule.needDeclaration = true;
                     module.children.push(childModule);
                     module.importLines.push(info.codepos);
                 }
@@ -530,16 +483,18 @@ export class Bundler
         if (this.lock !== null) throw Error('bundler is busy');
         this.clear();
 
-        const lock = this.lock = new WritingLock(this.main);
-        this.mapgen = SourceMap.newInstance(this.output);
+        const lock = this.lock = new ValueLock(this.main);
+        this.mapgen = this.noSourceMapWorker ? new SourceMapDirect(this.output) : SourceMap.newInstance(this.output);
             
         if (this.tsconfig !== null) this.deplist.push(this.tsconfig);
 
-        if (this.verbose) console.log((this.entryApath || this.basedir)+': starting');
+        if (this.verbose) console.log('START '+(this.entryApath || this.basedir));
         let entryModule:BundlerModule|null = null;
         let entryRefined:RefinedModule|null = null;
         if (this.entryApath !== null) {
             entryModule = this._getEntryModule(this.entryApath);
+            if (this.declaration) entryModule.needDeclaration = true;
+            if (this.verbose) console.log(`entry - ${entryModule.mpath}`);
             entryRefined = await entryModule.refine();
             if (entryRefined === null) {
                 this.lock = null;
@@ -547,14 +502,11 @@ export class Bundler
             }
         }
         
-        let writer:FileWriter;
-        try
-        {
-            writer = await this._startWrite(lock, entryRefined !== null ? entryRefined.firstLineComment : null);
-            lock.resolveWriter(writer);
-        }
-        catch (err)
-        {
+        let jsWriter:FileWriter;
+        let dtsWriter:FileWriter|null;
+        try {
+            [jsWriter, dtsWriter] = await this._startWrite(lock, entryRefined !== null ? entryRefined.firstLineComment : null);
+        } catch (err) {
             this.lock = null;
             return false;
         }
@@ -564,94 +516,108 @@ export class Bundler
         }
 
         for (const apath of this.files) {
-            this.append(lock, this.getModule(apath, null));
+            const libmodule = this.getModule(apath, null);
+            if (this.declaration) libmodule.needDeclaration = true;
+            this.append(lock, libmodule);
         }
 
         await this.taskQueue.onceEnd();
+        await this.writingCounter.waitZero();
 
-        for (const apath in this.cache)
-        {
-            const module = this.cache[apath];
-            if (module.number !== ExternalMode.Preimport) continue;
-            await writer.write(`${module.varName}:require('${apath}'),\n`);
-            this.lineOffset ++;
-        }
-        if ('__resolve' in this.cache)
-        {
-            if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
-            {
-                await writer.write(`__resolve(rpath){\n`);
+        await concurrent(
+            async()=>{
+                for (const module of this.jsPreloadModules) {
+                    await jsWriter.write(`${module.varName}:require('${module.apath}'),\n`);
+                    this.sourceMapLineOffset ++;
+                }
+        
+                if ('__resolve' in this.cache) {
+                    if (this.tsoptions.target! >= ts.ScriptTarget.ES2015) {
+                        await jsWriter.write(`__resolve(rpath){\n`);
+                    } else {
+                        await jsWriter.write(`__resolve:function(rpath){\n`);
+                    }
+                    const path = this.cache.path;
+                    await jsWriter.write(`return this.${path.varName}.join(this.__dirname, rpath);\n},\n`);
+                    if (this.tsoptions.target! >= ts.ScriptTarget.ES2015) {
+                        await jsWriter.write(`__dirname,\n`);
+                    } else {
+                        await jsWriter.write(`__dirname:__dirname,\n`);
+                    }
+                    this.sourceMapLineOffset += 4;
+                }
+        
+                if (this.entryModuleIsAccessed || this.tsoptions.target! < ts.ScriptTarget.ES5) {
+                    await jsWriter.write(`entry:exports\n};\n`);
+                    this.sourceMapLineOffset += 2;
+                } else {
+                    await jsWriter.write(`};\n`);
+                    this.sourceMapLineOffset ++;
+                }
+            },async()=>{
+                if (dtsWriter === null) return;
+                await dtsWriter.write('}\n');
+                for (const module of this.dtsPreloadModules) {
+                    await dtsWriter.write(`import ${this.globalVarName}_${module.varName} = require('${module.apath}');\n`);
+                    this.sourceMapLineOffset ++;
+                }
             }
-            else
-            {
-                await writer.write(`__resolve:function(rpath){\n`);
-            }
-            const path = this.cache.path;
-            await writer.write(`return this.${path.varName}.join(this.__dirname, rpath);\n},\n`);
-            if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
-            {
-                await writer.write(`__dirname,\n`);
-            }
-            else
-            {
-                await writer.write(`__dirname:__dirname,\n`);
-            }
-            this.lineOffset += 4;
-        }
-
-        if (this.entryModuleIsAccessed || this.tsoptions.target! < ts.ScriptTarget.ES5)
-        {
-            await writer.write(`entry:exports\n};\n`);
-            this.lineOffset += 2;
-        }
-        else
-        {
-            await writer.write(`};\n`);
-            this.lineOffset ++;
-        }
-
+        );
+        
         if (entryModule !== null) {
             await this.write(lock, entryModule, entryRefined!);
-            memoryCache.put(entryRefined!.id.number, entryRefined!);
+            memoryCache.release(entryRefined!.id.number, entryRefined!);
         }
 
-        await Promise.all([(async()=>{
-            await writer.write('\n');
-            if (this.entryModuleIsAccessed)
-            {
-                await writer.write(`${this.globalVarName}.entry=module.exports;\n`);
+        const saveProm = (async()=>{
+            await jsWriter.write('\n');
+            if (this.entryModuleIsAccessed) {
+                await jsWriter.write(`${this.globalVarName}.entry=module.exports;\n`);
             }
-            if (this.needWrap)
-            {
-                if (this.tsoptions.target! >= ts.ScriptTarget.ES2015)
-                {
+            if (this.needWrap) {
+                if (this.tsoptions.target! >= ts.ScriptTarget.ES2015) {
                     // arrow end
-                    await writer.write(`})();\n`);
-                }
-                else
-                {
-                    if (this.exportRule === ExportRule.Direct && this.exportVarName === 'this')
-                    {
-                        await writer.write(`}).call(this);\n`);
-                    }
-                    else
-                    {
-                        await writer.write(`})();\n`);
+                    await jsWriter.write(`})();\n`);
+                } else {
+                    if (this.exportRule === ExportRule.Direct && this.exportVarName === 'this') {
+                        await jsWriter.write(`}).call(this);\n`);
+                    } else {
+                        await jsWriter.write(`})();\n`);
                     }
                 }
             }
             if (this.exportLib) {
                 switch (this.exportRule) {
                 case ExportRule.CommonJS:
-                    writer.write(`module.exports = ${this.globalVarName};\n`);
+                    await jsWriter.write(`module.exports = ${this.globalVarName};\n`);
                     break;
                 }
             }
-            await writer.write(`//# sourceMappingURL=${path.basename(this.output)}.map`);
-            await writer.end();
-        })(), this.mapgen.save()]);
+        })();
 
-        if (this.verbose) console.log((this.entryApath || this.basedir)+': finished');
+        if (this.tsoptions.sourceMap) {
+            if (this.inlineSourceMap) {
+                const [_, dataUrl] = await Promise.all([
+                    saveProm, 
+                    this.mapgen.toDataURL()
+                ]);
+                await jsWriter.write(`//# sourceMappingURL=${dataUrl}`);
+            } else {
+                await Promise.all([
+                    saveProm.then(()=>jsWriter.write(`//# sourceMappingURL=${path.basename(this.output)}.map`)), 
+                    this.mapgen.save()
+                ]);
+            }
+        } else {
+            await saveProm;
+        }
+        await jsWriter.end();
+        if (dtsWriter !== null) {
+            await dtsWriter.end();
+        }
+
+        if (this.verbose) console.log('FINISH '+(this.entryApath || this.basedir));
+        this.lock = null;
         return true;
     }
 
@@ -688,33 +654,23 @@ export class Bundler
 
     clear():void {
         this.deplist.length = 0;
-        this.main.clearCache(this, this.moduleByName);
         this.mapgen = null;
-        this.lineOffset = 0;
+        this.sourceMapLineOffset = 0;
         this.lock = null;
         this.moduleByName.clear();
-        this.sourceFileCache.clear();
     }
 
-    getExternal(name:string, mode:ExternalMode):BundlerModuleId {
-        if (name.startsWith('.'))
-        {
-            this.main.reportMessage(IfTsbError.InternalError, `${name}: external module starts with dot`);
-        }
-        return this.getModuleId(name, mode, null);
-    }
-
-    getModule(apath:string, mpath?:string|null, forceModuleName?:string):BundlerModule {
+    getModule(apath:string, mpath?:string|null, forceModuleName?:string|null):BundlerModule {
         let module = this.moduleByName.get(apath);
-        if (module) return module;
-
-        if (mpath == null) {
-            const filename = path.basename(apath);
-            mpath = './'+filename.substr(0, filename.length - getScriptKind(filename).ext.length);
+        if (module == null) {
+            if (mpath == null) {
+                const filename = path.basename(apath);
+                mpath = './'+filename.substr(0, filename.length - getScriptKind(filename).ext.length);
+            }
+    
+            module = new BundlerModule(this, mpath, apath, forceModuleName || null);
+            this.moduleByName.set(apath, module);
         }
-
-        module = new BundlerModule(this, mpath, apath, forceModuleName || null);
-        this.moduleByName.set(apath, module);
         return module;
     }
 

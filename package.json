@@ -1,6 +1,6 @@
 {
   "name": "if-tsb",
-  "version": "0.2.15",
+  "version": "0.3.0",
   "description": "Insanely Fast TypeScript Bundler",
   "main": "./index.bundle.js",
   "bin": {
@@ -24,18 +24,19 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@types/glob-to-regexp": "^0.4.0",
+    "@types/glob-to-regexp": "^0.4.1",
     "colors": "^1.4.0",
-    "glob": "^7.1.7",
+    "glob": "^7.2.0",
     "glob-to-regexp": "^0.4.1",
     "source-map": "~0.6.1",
-    "tslib": "^2.2.0",
-    "typescript": "^4.2.4"
+    "tslib": "^2.3.1",
+    "typescript": "^4.4.3"
   },
   "devDependencies": {
-    "@types/find-cache-dir": "^3.2.0",
-    "@types/glob": "^7.1.3",
-    "@types/node": "^6.14.13",
+    "@types/find-cache-dir": "^3.2.1",
+    "@types/glob": "^7.1.4",
+    "@types/node": "^16.10.2",
+    "@types/through2": "^2.0.36",
     "ts-node": "^9.1.1"
   }
 }

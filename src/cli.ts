@@ -3,6 +3,7 @@
 import { bundle, bundleWatch, clearBundlerCache } from "./index";
 import fs = require('fs');
 import path = require('path');
+import { time } from "./util";
 
 (async()=>{
 
@@ -14,13 +15,10 @@ import path = require('path');
     let clearCache = false;
     let output:string|undefined = undefined;
     
-    for (let i=2;i<argc;)
-    {
+    for (let i=2;i<argc;) {
         const v = process.argv[i++];
-        if (v.startsWith('-'))
-        {
-            switch (v.substr(1))
-            {
+        if (v.startsWith('-')) {
+            switch (v.substr(1)) {
             case 'o':
                 output = process.argv[i++];
                 if (!output)
@@ -45,30 +43,24 @@ import path = require('path');
                 error = true;
                 break;
             }
-        }
-        else
-        {  
+        } else {  
             targetPathes.push(v);
         }
     }
     
     if (error) return;
-    if (clearCache)
-    {
+    if (clearCache) {
         await clearBundlerCache();
     }
-    if (targetPathes.length === 0)
-    {
+    if (targetPathes.length === 0) {
         if (clearCache) return;
         targetPathes.push('.');
     }
 
-    if (watch)
-    {
-        bundleWatch(targetPathes, output);
-    }
-    else
-    {
-        await bundle(targetPathes, output);
+    if (watch) {
+        bundle.watch(targetPathes, output);
+    } else {
+        const ms = await bundle(targetPathes, output);
+        console.log(`[${time()}] ${ms.toFixed(6)}ms`);
     }
 })().catch(err=>console.error(err));

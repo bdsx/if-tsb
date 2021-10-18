@@ -1,7 +1,6 @@
 import ts = require("typescript");
 
-export interface BundlerOptions
-{
+export interface BundlerOptions {
     clearConsole?:boolean;
     verbose?:boolean;
     checkCircularDependency?:boolean;
@@ -16,10 +15,10 @@ export interface BundlerOptions
     preimport?:string[];
     concurrency?:number;
     exportLib?:boolean;
+    noSourceMapWorker?:boolean;
 }
 
-export enum ExportRule
-{
+export enum ExportRule {
     None,
     CommonJS,
     ES2015,
@@ -27,24 +26,25 @@ export enum ExportRule
     Direct
 }
 
-export enum IfTsbError
-{
+export enum IfTsbError {
     InternalError=20000,
     Unsupported=20001,
     JsError=20002,
     Dupplicated=20003,
+    WrongUsage=20004,
+    TooSlow=20005,
     ModuleNotFound=2307,
 }
 
-export interface BundlerOptionsWithOutput extends BundlerOptions
-{
+export interface BundlerOptionsWithOutput extends BundlerOptions {
     output?:string;
 }
 
-export interface TsConfig
-{
-    entry:string[]|Record<string, (string|BundlerOptionsWithOutput)>|string;
-    output?:string;
+export interface TsConfig {
+    exclude?:string[];
+    include?:string[];
+    entry?:string[]|Record<string, (string|BundlerOptionsWithOutput)>|string;
+    output?:string|null;
 
     bundlerOptions?:BundlerOptions;
     
@@ -55,9 +55,13 @@ export interface TsConfig
     compilerOptions?:ts.CompilerOptions;
 }
 
-export enum ExternalMode
-{
+export enum ExternalMode {
     NoExternal=0,
     Manual=-1,
-    Preimport=-2
+    Preimport=-2,
+}
+
+export interface PhaseListener {
+    onStart?():void;
+    onFinish?():void;
 }

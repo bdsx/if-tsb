@@ -69,8 +69,7 @@ export class FilesWatcher<T>
         }
     }
 
-    add(target:T, file:string):void
-    {
+    add(target:T, file:string):void {
         let item = this.watching.get(file);
         if (item)
         {

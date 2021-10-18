@@ -1,5 +1,5 @@
 ## if-tsb: Insanely Fast TypeScript Bundler
-if-tsb is Bundler for TypeScript.
+if-tsb is the bundler for TypeScript.  
 
 ```sh
 npm i -g if-tsb # install
@@ -72,7 +72,8 @@ if-tab --clear-cache # clear cache
         "externals": [], // files that do not bundle
         "cacheMemory": "1MB", // cache memory for watching
         "module": "none", // "commonjs"|"none"|"self"|"window"|"this"|"var (varname)"|"let (varname)"|"const (varname)"
-        "preimport": [], // modules for pre-import. it replaces require('name') to __tsb.name
+        "preimport": [], // modules for pre-import. it replaces require('name') to __tsb.name,
+        "noSourceMapWorker": false // do not use the worker for the sourcemap generating.
     },
     "compilerOptions": {
         /* ... */
@@ -124,9 +125,14 @@ import { bundle, bundleWatch } = require('if-tsb');
 
 bundle(['./entry.ts'] /*, './output.js' */); // build
 
-// bundleWatch(['./entry.ts']); // watch
+// bundle.watch(['./entry.ts']); // watch
 
 ```
+
+### Issues
+* It cannot assume declarations from the value. It will be `any` types
+ex) functions without type, variable defines without type.
+* it cannot handle `declare module "module_path"` properly.
 
 ### Links
 * [Discord](https://discord.gg/pC9XdkC)
