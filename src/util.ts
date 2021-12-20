@@ -376,7 +376,7 @@ export function joinModulePath(...pathes:string[]):string {
     else return outstr + out.join('/');
 }
 
-export function makeImportModulePath(baseMPath:string, baseAPath:string, importPath:string):string {
+export function makeImportModulePath(baseMPath:string, baseAPath:string, importPath:string):ParsedImportPath {
     let out:string;
     if (!baseMPath.endsWith('/index') && path.parse(baseAPath).name === 'index') {
         out = joinModulePath(baseMPath, importPath);
@@ -384,7 +384,28 @@ export function makeImportModulePath(baseMPath:string, baseAPath:string, importP
         const dirmodule = dirnameModulePath(baseMPath);
         out = joinModulePath(dirmodule, importPath);
     }
-    return out;
+    return new ParsedImportPath(importPath, out);
+}
+
+export class ParsedImportPath {
+    constructor(
+        public readonly importName:string,
+        public readonly mpath:string) {
+    }
+
+    literal(factory:ts.NodeFactory):ts.StringLiteral {
+        return factory.createStringLiteral(this.mpath);
+    }
+
+    call(factory:ts.NodeFactory):ts.Expression {
+        const mpathLitral = this.literal(factory);
+        return factory.createCallExpression(factory.createIdentifier('require'), undefined, [mpathLitral]);
+    }
+
+    import(factory:ts.NodeFactory):ts.ExternalModuleReference {
+        const mpathLitral = this.literal(factory);
+        return factory.createExternalModuleReference(mpathLitral);
+    }
 }
 
 export function tsbuild(tsconfig:TsConfig, basedir:string):void {

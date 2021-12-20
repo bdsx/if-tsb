@@ -2,6 +2,7 @@ import { Bundler } from "./bundler";
 import { cacheDir, cacheMapPath, CACHE_VERSION, getCacheFilePath } from "./cachedir";
 import { fsp } from "./fsp";
 import { BundlerModule, BundlerModuleId } from "./module";
+import { getMtime } from "./mtimecache";
 import { namelock } from "./namelock";
 import { Reporter } from "./reporter";
 import { IfTsbError, TsConfig } from "./types";
@@ -41,6 +42,7 @@ let instance:Promise<BundlerMainContext>|null = null;
 export class BundlerMainContext implements Reporter {
     public errorCount = 0;
     private readonly cache:Record<string, Record<string, BundlerModuleId>>;
+    private readonly accessedOutputs = new Set<string>();
     private readonly cacheUnusingId = new Set<number>();
     private lastCacheId = -1;
     public cacheJsonModified = false;
@@ -112,9 +114,9 @@ export class BundlerMainContext implements Reporter {
     getCacheJson():any {
         const output:Record<string, any> = {};
         output.version = CACHE_VERSION;
-        for (const entrypath in this.cache) {
-            const cache = this.cache[entrypath];
-            const outcache:Record<string,any> = output[entrypath] = {};
+        for (const outputpath in this.cache) {
+            const cache = this.cache[outputpath];
+            const outcache:Record<string,any> = output[outputpath] = {};
             for (const apath in cache) {
                 const id = cache[apath];
                 outcache[apath] = {
@@ -126,21 +128,31 @@ export class BundlerMainContext implements Reporter {
         return output;
     }
 
+    private _cleanBeforeSave():void {
+        for (const output in this.cache) {
+            if (this.accessedOutputs.has(output)) continue;
+            delete this.cache[output];
+            this.cacheJsonModified = true;
+        }
+    }
+
     saveCacheJsonSync():void {
+        this._cleanBeforeSave();
         if (!this.cacheJsonModified) return;
         this.cacheJsonModified = false;
         const output = this.getCacheJson();
         if (this.cacheJsonSaving) console.error(`cachejson is writing async and sync at once`);
-        fs.writeFileSync(cacheMapPath, JSON.stringify(output), 'utf-8');
+        fs.writeFileSync(cacheMapPath, JSON.stringify(output, null, 2), 'utf-8');
     }
 
     async saveCacheJson():Promise<void> {
+        this._cleanBeforeSave();
         if (this.cacheJsonSaving) return;
         this.cacheJsonSaving = true;
         while (this.cacheJsonModified) {
             this.cacheJsonModified = false;
             const output = this.getCacheJson();
-            await fsp.writeFile(cacheMapPath, JSON.stringify(output));
+            await fsp.writeFile(cacheMapPath, JSON.stringify(output, null, 2));
         }
         this.cacheJsonSaving = false;
     }
@@ -244,6 +256,7 @@ export class BundlerMainContext implements Reporter {
 
     getCacheMap(apath:string):Record<string,BundlerModuleId>
     {
+        this.accessedOutputs.add(apath);
         const map = this.cache[apath];
         if (map) return map;
         return this.cache[apath] = {};
@@ -291,7 +304,9 @@ export class BundlerMainContext implements Reporter {
                 continue;
             }
             try {
-                const bundler = new Bundler(this, basedir, resolvedOutput, newoptions, entryfile, [], tsconfig, compilerOptions);
+                const bundler = new Bundler(
+                    this, basedir, resolvedOutput, newoptions, entryfile, 
+                    [], tsconfig, compilerOptions, options);
                 bundlers.push(bundler);
                 const cache = this.cache[bundler.output];
                 for (const apath in cache) {
@@ -329,7 +344,7 @@ export class BundlerMainContext implements Reporter {
                 if (stat.isDirectory()) {
                     basedir = configPath;
                     const npath = path.join(configPath, 'tsconfig.json');
-                    if (fs.existsSync(npath)) {
+                    if (getMtime.existsSync(npath)) {
                         configPath = npath;
                     } else {
                         configPath = path.join(configPath, 'index.ts');
