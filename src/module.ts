@@ -4,18 +4,19 @@ import { ErrorPosition } from "./errpos";
 import { fsp } from "./fsp";
 import { LineStripper } from "./linestripper";
 import { memcache } from "./memmgr";
+import { registerModuleReloader, reloadableRequire } from "./modulereloader";
 import { getMtime } from "./mtimecache";
 import { namelock } from "./namelock";
 import { SourceFileData } from "./sourcefilecache";
 import { WriterStream as FileWriter } from './streamwriter';
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
-import { count, getScriptKind, makeImportModulePath, printDiagnostrics, SkipableTaskQueue } from "./util";
+import { count, getScriptKind, makeImportModulePath, ParsedImportPath, printDiagnostrics, SkipableTaskQueue } from "./util";
 import path = require('path');
-import fs = require("fs");
 import ts = require("typescript");
 export const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
 memcache.maximum = CACHE_MEMORY_DEFAULT;
 export const memoryCache = new memcache.Map<number, RefinedModule>();
+
 const builtin = new Set<string>([
     'assert',
     'buffer',
@@ -44,6 +45,7 @@ const builtin = new Set<string>([
     'vm',
     'zlib',
 ]);
+let moduleReloaderRegistered = false;
 
 export class ImportInfo {
     constructor(
@@ -297,7 +299,7 @@ export class BundlerModule {
         return this.error(this.makeErrorPosition(node), code, message);
     }
 
-    makeImportModulePath(mpath:string):string {
+    makeImportModulePath(mpath:string):ParsedImportPath {
         return makeImportModulePath(this.mpath, this.id.apath, mpath);
     }
 
@@ -331,6 +333,7 @@ export class BundlerModule {
         const refs:SourceFileData[] = [];
 
         let sourceFile:ts.SourceFile;
+        let typeChecker:ts.TypeChecker;
         try {
             let error = '';
             const data = bundler.sourceFileCache.take(filepath.replace(/\\/g, '/'));
@@ -347,11 +350,20 @@ export class BundlerModule {
         
         const jsFactory = (ctx:ts.TransformationContext)=>{
             const transformer = new JsTransformer(ctx, this, importer, sourceFile, false);
-    
-            const visit = (_node:ts.Node):ts.Node=>{
+
+            const visit = (_node:ts.Node):ts.Node|ts.Node[]=>{
                 transformer.stacks.push(_node);
 
                 switch (_node.kind) {
+                case ts.SyntaxKind.FunctionExpression: {
+                    const node = _node as ts.FunctionExpression;
+                    if (node.decorators != null) {
+                        for (const deco of node.decorators) {
+                            console.log(deco.getText(sourceFile));
+                        }
+                    }
+                    break;
+                }
                 case ts.SyntaxKind.Identifier: {
                     const node = _node as ts.Identifier;
                     const parent = transformer.stacks[transformer.stacks.length-1];
@@ -372,13 +384,14 @@ export class BundlerModule {
                     if (ref.kind === ts.SyntaxKind.ExternalModuleReference) {
                         const importPath = transformer.parseImportPath(ref.expression);
                         if (importPath === null) return node;
-                        const nnode = transformer.importFromStringLiteral(importPath) || importPath.call(ctx.factory);
-                        return ctx.factory.createVariableDeclaration(node.name, undefined, undefined, nnode);
+                        const nnode = transformer.importFromStringLiteral(importPath);
+                        if (nnode === NOIMPORT) return [];
+                        return ctx.factory.createVariableDeclaration(node.name, undefined, undefined, nnode || importPath.call(ctx.factory));
                     }
                     break;
                 }
                 case ts.SyntaxKind.CallExpression: {
-                    const node = _node as ts.CallExpression;
+                    let node = _node as ts.CallExpression;
                     switch (node.expression.kind) {
                     case ts.SyntaxKind.ImportKeyword: {
                         if (node.arguments.length !== 1) {
@@ -387,17 +400,50 @@ export class BundlerModule {
                             return node;
                         }
                         const importPath = transformer.parseImportPath(node.arguments[0]);
-                        if (importPath === null) return node
-                        return transformer.importFromStringLiteral(importPath) || importPath.call(ctx.factory);
+                        if (importPath === null) return node;
+                        const nnode = transformer.importFromStringLiteral(importPath);
+                        if (nnode === NOIMPORT) return ctx.factory.createObjectLiteralExpression();
+                        return nnode || importPath.call(ctx.factory);
                     }
                     case ts.SyntaxKind.Identifier: {
                         const identifier = node.expression as ts.Identifier;
                         if (identifier.escapedText === 'require') {
                             const importPath = transformer.parseImportPath(node.arguments[0]);
                             if (importPath === null) return node;
-                            return transformer.importFromStringLiteral(importPath) || importPath.call(ctx.factory);
+                            const nnode = transformer.importFromStringLiteral(importPath);
+                            if (nnode === NOIMPORT) return ctx.factory.createObjectLiteralExpression();
+                            return nnode || importPath.call(ctx.factory);
+                        } else {
+                            const signature = typeChecker.getResolvedSignature(node);
+                            if (typeof signature === 'undefined') break;
+                            const { declaration } = signature;
+                            if (declaration == null) break;
+                            const fileName = declaration.getSourceFile().fileName;
+                            if (!fileName.endsWith('/if-tsb/reflect.d.ts')) break;
+                            if (declaration.kind === ts.SyntaxKind.JSDocSignature) break;
+                            if (declaration.name == null) break;
+                            if (declaration.name.getText() !== 'reflect') break;
+                            if ((node as any).original != null) {
+                                node = (node as any).original;
+                            }
+                            
+                            if (node.typeArguments == null) break;
+                            const params = node.typeArguments.map(v=>typeChecker.getTypeFromTypeNode(v));
+                            const path = params.shift();
+                            const funcname = params.shift();
+                            if (path == null || !path.isStringLiteral()) break;
+                            if (funcname == null || !funcname.isStringLiteral()) break;
+                            const mpath = that.makeImportModulePath(path.value);
+                            const importPath = transformer.getImportPath(mpath);
+                            if (importPath === null) break;
+
+                            if (!moduleReloaderRegistered) {
+                                moduleReloaderRegistered = true;
+                                registerModuleReloader(that.bundler.tsconfigContent.compilerOptions);
+                            }
+                            const reflecter = reloadableRequire(require, importPath);
+                            return reflecter[funcname.value](ctx, typeChecker, ...params);
                         }
-                        break;
                     }}
                     break;
                 }}
@@ -469,6 +515,7 @@ export class BundlerModule {
                         const importPath = transformer.parseImportPath(ref.expression);
                         if (importPath === null) return node;
                         const nnode = transformer.importFromStringLiteral(importPath);
+                        if (nnode === NOIMPORT) return [];
                         return ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, node.name, nnode);
                     }
                     break;
@@ -482,6 +529,7 @@ export class BundlerModule {
                     const importPath = transformer.parseImportPath(node.moduleSpecifier);
                     if (importPath === null) return node;
                     const importName = transformer.importFromStringLiteral(importPath);
+                    if (importName === NOIMPORT) return [];
                     if (clause.namedBindings != null) {
                         const out:ts.Node[] = [];
                         switch (clause.namedBindings.kind) {
@@ -524,7 +572,9 @@ export class BundlerModule {
                         }
                         const importPath = transformer.parseImportPath(node.arguments[0]);
                         if (importPath === null) return node;
-                        return transformer.importFromStringLiteral(importPath);
+                        const nnode = transformer.importFromStringLiteral(importPath);;
+                        if (nnode === NOIMPORT) return ctx.factory.createObjectLiteralExpression();
+                        return nnode;
                     }}
                     break;
                 }}
@@ -616,6 +666,7 @@ export class BundlerModule {
             Object.setPrototypeOf(tsoptions, this.bundler.tsoptions);
 
             bundler.program = ts.createProgram([filepath], tsoptions, compilerHost, bundler.program, diagnostics);
+            typeChecker = bundler.program.getTypeChecker();
             
             if (bundler.verbose) console.log(`emit ${filepath} ${new Date(sourceMtime).toLocaleTimeString()}`);
             bundler.program.emit(
@@ -626,7 +677,6 @@ export class BundlerModule {
                     after: [jsFactory],
                     afterDeclarations: [declFactory]
                 });
-            
             if (diagnostics != null) {
                 diagnostics.push(...bundler.program.getSyntacticDiagnostics(sourceFile));
                 if (diagnostics.length !== 0) {
@@ -638,6 +688,7 @@ export class BundlerModule {
                 if (diagnostics == null) {
                     printDiagnostrics(bundler.program.getSyntacticDiagnostics(sourceFile));
                 }
+                
                 this.bundler.main.reportMessage(IfTsbError.Unsupported, `Failed to parse ${filepath}`);
                 return null;
             }
@@ -689,7 +740,7 @@ export class BundlerModule {
                     break;
                 }
             } else {
-                const useStrict = !bundler.tsoptions.alwaysStrict && stricted;
+                const useStrict = !bundler.useStrict && stricted;
     
                 if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
                     refined.content += `${refined.id.varName}(){\n`;
@@ -870,26 +921,10 @@ class ModuleImporter {
     }
 }
 
-class ParsedImportPath {
-    constructor(
-        public readonly importName:string,
-        public readonly mpath:string) {
-    }
-
-    literal(factory:ts.NodeFactory):ts.StringLiteral {
-        return factory.createStringLiteral(this.mpath);
-    }
-
-    call(factory:ts.NodeFactory):ts.Expression {
-        const mpathLitral = this.literal(factory);
-        return factory.createCallExpression(factory.createIdentifier('require'), undefined, [mpathLitral]);
-    }
-
-    import(factory:ts.NodeFactory):ts.ExternalModuleReference {
-        const mpathLitral = this.literal(factory);
-        return factory.createExternalModuleReference(mpathLitral);
-    }
-}
+const PREIMPORT = '#pre';
+type PREIMPORT = '#pre';
+const NOIMPORT = '#noimp';
+type NOIMPORT = '#noimp';
 
 abstract class Transformer<T> {
     public readonly stacks:ts.Node[] = [];
@@ -922,9 +957,7 @@ abstract class Transformer<T> {
             return null;
         }
         const node = _node as ts.StringLiteral;
-        const importName = node.text;
-        const childModuleMpath = this.module.makeImportModulePath(importName);
-        return new ParsedImportPath(importName, childModuleMpath);
+        return this.module.makeImportModulePath(node.text);
     }
 
     preimport(mpath:string):T{
@@ -943,8 +976,8 @@ abstract class Transformer<T> {
         }
         return this.module.makeErrorPosition(this.sourceFile);
     }
-    
-    importFromStringLiteral(importPath:ParsedImportPath):T|null{
+
+    getImportPath(importPath:ParsedImportPath):string|null {
         const oldsys = this.bundler.sys;
         const sys:ts.System = Object.setPrototypeOf({
             fileExists(path: string): boolean {
@@ -953,13 +986,47 @@ abstract class Transformer<T> {
             }
         }, oldsys);
 
+        let module = ts.nodeModuleNameResolver(importPath.importName, this.module.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
+        if (!module.resolvedModule && importPath.importName === '.') 
+            module = ts.nodeModuleNameResolver('./index', this.module.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
+        const info = module.resolvedModule;
+        if (info == null) {
+            if (!importPath.importName.startsWith('.')) {
+                return importPath.mpath;
+            }
+            this.refined.errored = true;
+            this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+            return null;
+        }
+
+        let childmoduleApath = path.isAbsolute(info.resolvedFileName) ? path.join(info.resolvedFileName) : path.join(this.bundler.basedir, info.resolvedFileName);
+        const kind = getScriptKind(childmoduleApath);
+        if (kind.kind === ts.ScriptKind.External) {
+            childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
+            if (!getMtime.existsSync(childmoduleApath)) {
+                this.refined.errored = true;
+                this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+                return null;
+            }
+        }
+        return childmoduleApath;
+    }
+
+    resolveImport(importPath:ParsedImportPath):string|PREIMPORT|null {
         for (const glob of this.bundler.externals) {
             if (glob.test(importPath.mpath)) return null;
         }
         if (this.bundler.preimportTargets.has(importPath.mpath)) {
-            return this.preimport(importPath.mpath);
+            return PREIMPORT;
         }
 
+        const oldsys = this.bundler.sys;
+        const sys:ts.System = Object.setPrototypeOf({
+            fileExists(path: string): boolean {
+                if (getScriptKind(path).kind === ts.ScriptKind.External) return false;
+                return oldsys.fileExists(path);
+            }
+        }, oldsys);
         let module = ts.nodeModuleNameResolver(importPath.importName, this.module.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
         if (!module.resolvedModule && importPath.importName === '.') 
             module = ts.nodeModuleNameResolver('./index', this.module.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
@@ -967,7 +1034,7 @@ abstract class Transformer<T> {
         if (info == null) {
             if (!importPath.importName.startsWith('.')) {
                 if (builtin.has(importPath.mpath)) {
-                    return this.preimport(importPath.mpath);
+                    return PREIMPORT;
                 }
                 if (!this.bundler.bundleExternals) return null;
             }
@@ -978,7 +1045,7 @@ abstract class Transformer<T> {
 
         if (info.isExternalLibraryImport) {
             if (!this.bundler.bundleExternals) {
-                if (this.delcaration) return this.preimport(importPath.mpath);
+                if (this.delcaration) return PREIMPORT;
                 return null;
             }
         }
@@ -987,15 +1054,27 @@ abstract class Transformer<T> {
         const kind = getScriptKind(childmoduleApath);
         if (kind.kind === ts.ScriptKind.External) {
             childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
-            if (!fs.existsSync(childmoduleApath)) {
+            if (!getMtime.existsSync(childmoduleApath)) {
                 this.refined.errored = true;
                 this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
                 return null;
             }
         }
-
-        const childModule = this.importer.addToImportList(importPath.mpath, childmoduleApath, this.getErrorPosition(), this.delcaration);
-        return this.importLocal(childModule);
+        return childmoduleApath;
+    }
+    
+    importFromStringLiteral(importPath:ParsedImportPath):T|NOIMPORT|null{
+        if (importPath.mpath === 'if-tsb/reflect') {
+            return NOIMPORT;
+        }
+        const resolved = this.resolveImport(importPath);
+        if (resolved === null) return null;
+        if (resolved === PREIMPORT) {
+            return this.preimport(importPath.mpath);
+        } else {
+            const childModule = this.importer.addToImportList(importPath.mpath, resolved, this.getErrorPosition(), this.delcaration);
+            return this.importLocal(childModule);
+        }
     }
 }
 
@@ -1025,7 +1104,7 @@ class DeclTransformer extends Transformer<ts.EntityName> {
     importLocal(childModule:BundlerModule):ts.EntityName{
         return this.makePropertyAccess(this.makeIdentifier(this.bundler.globalVarName), childModule.id.varName);
     }
-    importFromStringLiteral(importPath:ParsedImportPath):ts.EntityName {
+    importFromStringLiteral(importPath:ParsedImportPath):ts.EntityName|NOIMPORT {
         const importName = super.importFromStringLiteral(importPath);
         if (importName === null) return this.preimport(importPath.mpath);
         return importName;

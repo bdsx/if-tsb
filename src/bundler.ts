@@ -7,7 +7,8 @@ import { BundlerMainContext } from "./context";
 import { CounterLock } from "./counterlock";
 import { fsp } from "./fsp";
 import { memcache } from "./memmgr";
-import { BundlerModule, BundlerModuleId, CheckState, memoryCache, RefinedModule } from "./module";
+import { BundlerModule, BundlerModuleId, CheckState, RefinedModule } from "./module";
+import { getMtime } from "./mtimecache";
 import { SourceFileCache } from "./sourcefilecache";
 import { SourceMap, SourceMapDirect } from "./sourcemap";
 import { WriterStream as FileWriter, WriterStream } from './streamwriter';
@@ -47,6 +48,7 @@ export class Bundler {
     public readonly exportLib:boolean;
     public readonly declaration:boolean;
     public readonly verbose:boolean;
+    public readonly useStrict:boolean;
 
     private readonly moduleByName = new Map<string, BundlerModule>();
     public readonly deplist:string[] = [];
@@ -76,8 +78,13 @@ export class Bundler {
         entry:string|null,
         private readonly files:string[],
         public readonly tsconfig:string|null,
-        public readonly tsoptions:ts.CompilerOptions) {
+        public readonly tsoptions:ts.CompilerOptions,
+        public readonly tsconfigContent:TsConfig) {
         this.cache = main.getCacheMap(resolvedOutput);
+        if (tsoptions.noEmitOnError === true) {
+            main.reportMessage(IfTsbError.Unsupported, 'noEmitOnError is ignored by if-tsb', true);
+        }
+        tsoptions.noEmitOnError = false;
 
         if (this.tsoptions.target === undefined) {
             this.tsoptions.target = ts.ScriptTarget.ES3;
@@ -120,7 +127,7 @@ export class Bundler {
             },
             fileExists(filepath:string):boolean
             {
-                return fs.existsSync(that.resolvePath(filepath));
+                return getMtime.existsSync(that.resolvePath(filepath));
             },
         }, ts.sys);
 
@@ -157,7 +164,7 @@ export class Bundler {
 
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
         this.sourceFileCache = SourceFileCache.getInstance(tsoptions.target!);
-        if (boptions.module === undefined) {
+        if (boptions.module == null) {
             this.exportRule = ExportRule.None;
         } else {
             const exportRule = (boptions.module+'').toLowerCase();
@@ -229,6 +236,13 @@ export class Bundler {
             fsp.verbose = true;
             memcache.verbose = true;
             // ConcurrencyQueue.verbose = true;
+        }
+
+        this.useStrict = false;
+        if (this.tsoptions.target <= ts.ScriptTarget.ES5) {
+            if (this.tsoptions.alwaysStrict) this.useStrict = true;
+        } else {
+            if (!this.tsoptions.noImplicitUseStrict) this.useStrict = true;
         }
     }
 
@@ -342,7 +356,7 @@ export class Bundler {
                     await jsWriter.write(firstLineComment+'\n');
                     this.sourceMapLineOffset++;
                 }
-                if (this.tsoptions.alwaysStrict) {
+                if (this.useStrict) {
                     await jsWriter.write('"use strict";\n');
                     this.sourceMapLineOffset++;
                 }
@@ -481,7 +495,6 @@ export class Bundler {
         this.clear();
 
         const lock = this.lock = new ValueLock(this.main);
-        this.mapgen = this.noSourceMapWorker ? new SourceMapDirect(this.output) : SourceMap.newInstance(this.output);
             
         if (this.tsconfig !== null) this.deplist.push(this.tsconfig);
 
@@ -507,7 +520,7 @@ export class Bundler {
             this.lock = null;
             return false;
         }
-
+        this.mapgen = this.noSourceMapWorker ? new SourceMapDirect(this.output) : SourceMap.newInstance(this.output);
         if (entryModule !== null) {
             this._appendChildren(lock, entryModule, entryRefined!);
         }

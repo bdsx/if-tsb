@@ -16,6 +16,19 @@
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "Bundle ftp-kr",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+            "args": ["${workspaceFolder}\\src\\cli.ts", "../ftp-kr"],
+            "outFiles": [
+                "${workspaceFolder}/**/*.js"
+            ]
         }
     ]
 }

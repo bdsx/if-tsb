@@ -14,7 +14,6 @@
         "lib": [ "ES2015" ],
         "module": "CommonJS",
         "moduleResolution": "Node",
-        "alwaysStrict": true,
         "noImplicitAny": true,
         "strictNullChecks": true,
         "noImplicitThis": true,

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { bundle, bundleWatch, clearBundlerCache } from "./index";
+import { bundle } from "./index";
+import { time } from "./util";
 import fs = require('fs');
 import path = require('path');
-import { time } from "./util";
 
 (async()=>{
 
@@ -50,7 +50,7 @@ import { time } from "./util";
     
     if (error) return;
     if (clearCache) {
-        await clearBundlerCache();
+        await bundle.clearCache();
     }
     if (targetPathes.length === 0) {
         if (clearCache) return;

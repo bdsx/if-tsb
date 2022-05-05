@@ -7,6 +7,7 @@ import { BundlerMainContext } from './context';
 import { fsp } from './fsp';
 import { memcache } from './memmgr';
 import { CACHE_MEMORY_DEFAULT, memoryCache } from './module';
+import { getMtime } from './mtimecache';
 import { namelock } from './namelock';
 import { PhaseListener, TsConfig } from './types';
 import { defaultFormatHost, printDiagnostrics, resolved, time, tsbuild, tswatch } from './util';
@@ -14,7 +15,6 @@ import { FilesWatcher } from './watch';
 import fs = require('fs');
 import path = require('path');
 import ts = require('typescript');
-import { getMtime } from './mtimecache';
 export { TsConfig };
 
 export async function bundle(entries?:string[]|null, output?:string|null|TsConfig):Promise<number> {
@@ -33,6 +33,7 @@ export async function bundle(entries?:string[]|null, output?:string|null|TsConfi
             ctx.reportFromCatch(err);
         }
     }
+
     const duration = process.hrtime(started);
     await ctx.saveCacheJson();
     if (ctx.errorCount !== 0) {
@@ -66,7 +67,7 @@ export namespace bundle {
         const stat = fs.statSync(configPath);
         if (stat.isDirectory()) {
             configPath = path.join(configPath, 'tsconfig.json');
-            if (!fs.existsSync(configPath)) {
+            if (!getMtime.existsSync(configPath)) {
                 return null;
             }
         } else {
