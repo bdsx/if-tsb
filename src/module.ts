@@ -439,11 +439,11 @@ export class BundlerModule {
                     const exports:ts.ExportSpecifier[] = [];
                     if (node.expression.kind === ts.SyntaxKind.Identifier) {
                         identifier = node.expression as ts.Identifier;
-                        exports.push(ctx.factory.createExportSpecifier(identifier, exportName));
+                        exports.push(ctx.factory.createExportSpecifier(false, identifier, exportName));
                     } else {
                         identifier = exportName;
                         out.push(ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, identifier, node.expression as ts.ModuleReference));
-                        exports.push(ctx.factory.createExportSpecifier(undefined, identifier));
+                        exports.push(ctx.factory.createExportSpecifier(false, undefined, identifier));
                     }
 
                     if (node.isExportEquals) {
@@ -451,7 +451,7 @@ export class BundlerModule {
                         exportEquals = true;
                     } else {
                         // export defualt item
-                        exports.push(ctx.factory.createExportSpecifier(identifier, 'default'));
+                        exports.push(ctx.factory.createExportSpecifier(false, identifier, 'default'));
                     }
                     out.push(ctx.factory.createExportDeclaration(
                         undefined,

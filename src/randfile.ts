@@ -14,7 +14,7 @@ export class File
     constructor(path:string)
     {
         this.latestTask = new Promise((resolve, reject)=>{
-            fs.open(path, 'wb', (err, fd)=>{
+            fs.open(path, 'w', (err, fd)=>{
                 if (err)
                 {
                     this.error = err;
