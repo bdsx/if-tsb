@@ -335,14 +335,14 @@ export class BundlerModule {
         let sourceFile:ts.SourceFile;
         let typeChecker:ts.TypeChecker;
         try {
-            let error = '';
-            const data = bundler.sourceFileCache.take(filepath.replace(/\\/g, '/'));
+            const fileName = filepath.replace(/\\/g, '/');
+            let data = bundler.sourceFileCache.take(fileName);
             refs.push(data);
-            sourceFile = await data.get();
-            if (sourceFile == null) {
-                this.error(null, IfTsbError.ModuleNotFound, error+' '+filepath);
-                return null;
+            if (await data.isModified()) {
+                memcache.unuse(data);
+                data = bundler.sourceFileCache.take(fileName);
             }
+            sourceFile = data.sourceFile;
         } catch (err) {
             this.error(null, IfTsbError.ModuleNotFound, err.message+' '+filepath);
             return null;
@@ -635,9 +635,13 @@ export class BundlerModule {
                     if (bundler.faster) {
                         return undefined;
                     }
-                    const data = bundler.sourceFileCache.take(fileName);
+                    let data = bundler.sourceFileCache.take(fileName);
+                    if (data.isModifiedSync()) {
+                        memcache.unuse(data);
+                        data = bundler.sourceFileCache.take(fileName);
+                    }
                     refs.push(data);
-                    return data.getSync();
+                    return data.sourceFile;
                 },
                 writeFile(name:string, text:string) {
                     if (text === '') text = ' ';

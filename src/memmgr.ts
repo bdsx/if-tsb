@@ -1,4 +1,3 @@
-import { isTypeReferenceNode } from "typescript";
 
 interface Node{
     clear():void;
@@ -8,7 +7,8 @@ interface Node{
     _prev?:Node;
     _cacheTimer?:number;
     _ref?:number;
-    _deleter?:()=>void;
+    _map?:Map<keyof any, Node>;
+    _key?:keyof any;
 }
 
 const axis = {} as Node;
@@ -63,7 +63,7 @@ function detach(node:Node):void {
 function reduce():boolean {
     const node = axis._next!;
     if (node === axis) return false;
-    node._deleter!();
+    node._map!.delete(node._key!);
     detach(node);
     node.clear();
     if (memcache.verbose) console.log('[memcache] reducing...');
@@ -127,8 +127,9 @@ export namespace memcache {
         if (item._ref === 0) {
             detach(item);
         }
-        item._deleter!();
-        delete item._deleter;
+        item._map!.delete(item._key!);
+        delete item._key;
+        delete item._map;
         delete item._ref;
         item.clear();
     }
@@ -142,7 +143,7 @@ export namespace memcache {
             if (node._ref != null) throw Error(`already registered cache item`);
             node._ref = 1;
             this.map.set(key, node);
-            node._deleter = ()=>this.map.delete(key);
+            node._map = this.map;
         }
     
         takeOrCreate(key:K, creator:()=>V):V {
@@ -170,7 +171,7 @@ export namespace memcache {
                 item.clear();
                 
                 delete item._ref;
-                delete item._deleter;
+                delete item._map;
             }
             this.map.clear();
         }

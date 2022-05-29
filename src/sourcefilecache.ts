@@ -6,48 +6,35 @@ import { memcache } from './memmgr';
 import { getMtime } from './mtimecache';
 
 export class SourceFileData {
-    private sourceFile:ts.SourceFile|null = null;
-    public size = 0;
-    private mtime:number = 0;
+    public sourceFile:ts.SourceFile;
+    public readonly size;
+    private readonly mtime:number;
 
     constructor(
         public readonly filename:string,
         public readonly languageVersion:ts.ScriptTarget,
     ) {
-    }
-
-    getSync():ts.SourceFile {
-        const mtime = getMtime.sync(this.filename);
-        if (mtime === this.mtime) {
-            return this.sourceFile!;
-        }
-        this.mtime = mtime;
+        this.mtime = getMtime.sync(this.filename);
 
         const contents = fs.readFileSync(this.filename, 'utf8');
         if (fsp.verbose) console.log(`createSourceFile ${this.filename}`);
         const sourceFile = ts.createSourceFile(this.filename, contents, this.languageVersion);
         this.sourceFile = sourceFile;
         this.size = contents.length * 2;
-        return sourceFile;
     }
 
-    async get():Promise<ts.SourceFile> {
+    async isModified():Promise<boolean> {
         const mtime = await getMtime(this.filename);
-        if (mtime === this.mtime) {
-            return this.sourceFile!;
-        }
-        this.mtime = mtime;
-
-        const contents = fs.readFileSync(this.filename, 'utf8');
-        if (fsp.verbose) console.log(`createSourceFile ${this.filename}`);
-        const sourceFile = ts.createSourceFile(this.filename, contents, this.languageVersion);
-        this.sourceFile = sourceFile;
-        this.size = contents.length * 2;
-        return sourceFile;
+        return mtime !== this.mtime;
+    }
+    
+    isModifiedSync():boolean {
+        const mtime = getMtime.sync(this.filename);
+        return mtime !== this.mtime;
     }
 
     clear():void {
-        this.sourceFile = null;
+        this.sourceFile = null as any;
     }
 
     release():void {
