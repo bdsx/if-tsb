@@ -131,7 +131,7 @@ export class RefinedModule {
         this.saving.run(async()=>{
             try {
                 await namelock.lock(this.id.number);
-                const writer = new FileWriter(getCacheFilePath(this.id));
+                const writer = new FileWriter(getCacheFilePath(this.id.number));
                 await writer.write(this.sourceMtime+'\0');
                 await writer.write(this.tsconfigMtime+'\0');
                 await writer.write(ImportInfo.stringify(this.imports)+'\0');
@@ -152,7 +152,7 @@ export class RefinedModule {
     }
 
     async load():Promise<boolean> {
-        const cachepath = getCacheFilePath(this.id);
+        const cachepath = getCacheFilePath(this.id.number);
         let content:string;
         try {
             await namelock.lock(this.id.number);
@@ -203,7 +203,7 @@ export class RefinedModule {
             } else {
                 try {
                     await namelock.lock(id.number);
-                    const cachepath = getCacheFilePath(id);
+                    const cachepath = getCacheFilePath(id.number);
                     let cacheMtime = -1;
                     await Promise.all([
                         getMtime(cachepath).then(mtime=>{
@@ -255,9 +255,8 @@ export class BundlerModule {
     constructor(
         public readonly bundler:Bundler, 
         public readonly mpath:string,
-        apath:string,
-        forceModuleName:string|null) {
-        this.id = bundler.getModuleId(apath, ExternalMode.NoExternal, forceModuleName);
+        apath:string) {
+        this.id = bundler.getModuleId(apath, ExternalMode.NoExternal);
         this.rpath = path.relative(bundler.basedir, apath);
     }
 
@@ -890,7 +889,7 @@ export class BundlerModule {
             if (mode !== ExternalMode.Preimport) {
                 continue;
             }
-            const id = this.bundler.getModuleId(imp.mpath, mode, null);
+            const id = this.bundler.getModuleId(imp.mpath, mode);
             if (imp.declaration) {
                 this.bundler.dtsPreloadModules.add(id);
             } else {
@@ -914,7 +913,7 @@ class ModuleImporter {
     }
 
     addExternalList(name:string, mode:ExternalMode, codepos:ErrorPosition|null, declaration:boolean):BundlerModuleId {
-        const childModule = this.bundler.getModuleId(name, mode, null);
+        const childModule = this.bundler.getModuleId(name, mode);
         this.refined.imports.push(new ImportInfo((-mode)+'', name, codepos, declaration));
         return childModule;
     }

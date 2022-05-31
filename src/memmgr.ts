@@ -64,8 +64,7 @@ function reduce():boolean {
     const node = axis._next!;
     if (node === axis) return false;
     node._map!.delete(node._key!);
-    detach(node);
-    node.clear();
+    memcache.truncate(node);
     if (memcache.verbose) console.log('[memcache] reducing...');
     return true;
 }
@@ -133,6 +132,16 @@ export namespace memcache {
         delete item._ref;
         item.clear();
     }
+    export function truncate(item:Node):void {
+        if (item._ref == null) throw Error(`non registered cache item`);
+        if (item._ref !== 0) return;
+        detach(item);
+        item._map!.delete(item._key!);
+        delete item._key;
+        delete item._map;
+        delete item._ref;
+        item.clear();
+    }
 
     export class Map<K extends keyof any, V extends Node> {
     
@@ -166,12 +175,8 @@ export namespace memcache {
         clear():void {
             for (const item of this.map.values()) {
                 memcache.usage -= item.size;
-
-                detach(item);
-                item.clear();
-                
-                delete item._ref;
-                delete item._map;
+                release(item);
+                truncate(item);
             }
             this.map.clear();
         }

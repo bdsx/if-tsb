@@ -129,10 +129,19 @@ export class BundlerMainContext implements Reporter {
     }
 
     private _cleanBeforeSave():void {
+        const now = Date.now();
+        const next = now + 24 * 60 * 60 * 1000;
         for (const output in this.cache) {
-            if (this.accessedOutputs.has(output)) continue;
-            delete this.cache[output];
-            this.cacheJsonModified = true;
+            const cache = this.cache[output];
+            if (this.accessedOutputs.has(output)) {
+                cache.$cacheTo = next as any;
+            } else {
+                const cacheTo = cache.$cacheTo as any as number;
+                if (cacheTo == null || now > cacheTo) {
+                    delete this.cache[output];
+                    this.cacheJsonModified = true;
+                }
+            }
         }
     }
 
@@ -206,17 +215,9 @@ export class BundlerMainContext implements Reporter {
         console.trace('remove cache');
         bundler.deleteModuleVarName(id.varName);
         if (id.number < 0) return;
-        this.freeCacheId(id.number);
         delete cache[id.apath];
+        this.freeCacheId(id.number);
         this.cacheJsonModified = true;
-
-        await namelock.lock(id.number);
-        try {
-            await fsp.unlink(getCacheFilePath(id));
-        } catch (err) {
-        } finally {
-            namelock.unlock((id as BundlerModuleId).number);
-        }
     }
 
     clearCache(bundler:Bundler, modules:Map<string, BundlerModule>):void {
@@ -236,29 +237,40 @@ export class BundlerMainContext implements Reporter {
             this.cacheUnusingId.delete(first);
             return first;
         }
-        return ++this.lastCacheId;
+        const id = ++this.lastCacheId;
+        try {
+            fs.unlinkSync(getCacheFilePath(id));
+        } catch (err) {
+        }
+        return id;
     }
 
-    freeCacheId(id:number):void {
-        if (id < 0) return;
+    async freeCacheId(id:number):Promise<void> {
+        if (id < 0) throw TypeError(`Unexpected id: ${id}`);
+
         if (this.cacheUnusingId.has(id)) {
             console.error(colors.red(`Already unused id: ${id}`));
-            return;
-        }
-        if (id === this.lastCacheId) {
+        } else if (id === this.lastCacheId) {
             do {
                 --this.lastCacheId;
             } while (this.cacheUnusingId.delete(this.lastCacheId));
         } else {
             this.cacheUnusingId.add(id);
         }
+        
+        await namelock.lock(id);
+        try {
+            await fsp.unlink(getCacheFilePath(id));
+        } catch (err) {
+        } finally {
+            namelock.unlock(id);
+        }
     }
 
-    getCacheMap(apath:string):Record<string,BundlerModuleId>
-    {
+    getCacheMap(apath:string):Record<string,BundlerModuleId> {
         this.accessedOutputs.add(apath);
         const map = this.cache[apath];
-        if (map) return map;
+        if (map != null) return map;
         return this.cache[apath] = {};
     }
 

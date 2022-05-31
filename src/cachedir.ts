@@ -74,7 +74,6 @@ export const cacheMapPath = path.join(cacheDir, 'cachemap.json');
 export const CACHE_VERSION = 'TSBC-0.12';
 export const CACHE_SIGNATURE = '\0'+CACHE_VERSION;
 
-export function getCacheFilePath(id:BundlerModuleId):string
-{
-    return path.join(cacheDir, id.number+'');
+export function getCacheFilePath(id:number):string {
+    return path.join(cacheDir, id+'');
 }

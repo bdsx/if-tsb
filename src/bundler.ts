@@ -110,8 +110,7 @@ export class Bundler {
 
         const that = this;
         this.sys = Object.setPrototypeOf({
-            getCurrentDirectory():string
-            {
+            getCurrentDirectory():string {
                 return that.basedir;
             },
             directoryExists(filepath:string):boolean {
@@ -125,8 +124,7 @@ export class Bundler {
                     return false;
                 }
             },
-            fileExists(filepath:string):boolean
-            {
+            fileExists(filepath:string):boolean {
                 return getMtime.existsSync(that.resolvePath(filepath));
             },
         }, ts.sys);
@@ -168,8 +166,7 @@ export class Bundler {
             this.exportRule = ExportRule.None;
         } else {
             const exportRule = (boptions.module+'').toLowerCase();
-            switch (exportRule)
-            {
+            switch (exportRule) {
             case 'none': this.exportRule = ExportRule.None; break;
             case 'commonjs': this.exportRule = ExportRule.CommonJS; break;
             case 'es2015': this.exportRule = ExportRule.ES2015; break;
@@ -183,8 +180,7 @@ export class Bundler {
                 break;
             default:
                 const [rule, param] = splitContent(boptions.module, 2, ' ');
-                switch (rule.toLowerCase())
-                {
+                switch (rule.toLowerCase()) {
                 case 'var': 
                     this.exportRule = ExportRule.Var;
                     this.exportVarKeyword = 'var';
@@ -224,7 +220,7 @@ export class Bundler {
 
         this.moduleResolutionCache = ts.createModuleResolutionCache(this.basedir, ts.sys.useCaseSensitiveFileNames ? v=>v.toLocaleLowerCase() : v=>v);
         if (entry !== null) {
-            const apath = path.join(this.basedir, entry);
+            const apath = path.isAbsolute(entry) ? entry : path.join(this.basedir, entry);
             if (this.exportLib) {
                 this.files.push(apath);
             } else {
@@ -246,7 +242,7 @@ export class Bundler {
         }
     }
 
-    getModuleId(apath:string, mode:ExternalMode, forceModuleName:string|null):BundlerModuleId {
+    getModuleId(apath:string, mode:ExternalMode):BundlerModuleId {
         let id = this.cache[apath];
         if (id === undefined) {
             id = {
@@ -254,24 +250,15 @@ export class Bundler {
                 apath,
                 varName: ''
             };
-            if (mode === ExternalMode.Manual) {
-                forceModuleName = apath;
+
+            let varName = path.basename(apath);
+            const dotidx = varName.lastIndexOf('.');
+            if (dotidx !== -1) varName = varName.substr(0, dotidx);
+            if (varName === 'index') {
+                varName = path.basename(path.dirname(apath));
             }
-            if (forceModuleName !== null) {
-                id.varName = forceModuleName;
-                const old = this.addModuleVarName(id);
-                if (old !== null) {
-                    this.main.reportMessage(IfTsbError.InternalError, `Module name dupplicated: ${old.varName}`);
-                }
-            } else {
-                let varName = path.basename(apath);
-                const dotidx = varName.lastIndexOf('.');
-                if (dotidx !== -1) varName = varName.substr(0, dotidx);
-                if (varName === 'index') {
-                    varName = path.basename(path.dirname(apath));
-                }
-                this.allocModuleVarName(id, varName);
-            }
+            this.allocModuleVarName(id, varName);
+
             this.cache[apath] = id;
             this.main.cacheJsonModified = true;
         } else {
@@ -284,7 +271,7 @@ export class Bundler {
 
     deleteModuleId(apath:string):boolean {
         const id = this.cache[apath];
-        if (!id) return false;
+        if (id == null) return false;
         delete this.cache[apath];
         this.main.freeCacheId(id.number);
         this.deleteModuleVarName(id.varName);
@@ -465,7 +452,7 @@ export class Bundler {
             for (const info of refined.imports) {
                 const mode = info.getExternalMode();
                 if (mode !== ExternalMode.NoExternal) {
-                    this.getModuleId(info.mpath, mode, null);
+                    this.getModuleId(info.mpath, mode);
                 } else {
                     const mpath = info.mpath;
                     const childModule = this.getModule(info.apathOrExternalMode, mpath);
@@ -482,7 +469,7 @@ export class Bundler {
     }
 
     private _getEntryModule(apath:string):BundlerModule {
-        const entryModule = this.getModule(apath, null, '__entry');
+        const entryModule = this.getModule(apath, null);
         entryModule.isEntry = true;
         entryModule.isAppended = true;
 
@@ -670,7 +657,7 @@ export class Bundler {
         this.moduleByName.clear();
     }
 
-    getModule(apath:string, mpath?:string|null, forceModuleName?:string|null):BundlerModule {
+    getModule(apath:string, mpath?:string|null):BundlerModule {
         let module = this.moduleByName.get(apath);
         if (module == null) {
             if (mpath == null) {
@@ -678,7 +665,7 @@ export class Bundler {
                 mpath = './'+filename.substr(0, filename.length - getScriptKind(filename).ext.length);
             }
     
-            module = new BundlerModule(this, mpath, apath, forceModuleName || null);
+            module = new BundlerModule(this, mpath, apath);
             this.moduleByName.set(apath, module);
         }
         return module;
