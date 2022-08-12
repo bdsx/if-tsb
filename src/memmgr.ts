@@ -100,7 +100,7 @@ export namespace memcache {
         return item._ref != null;
     }
     export function release(item:Node):void {
-        if (item._ref == null) throw Error(`non registered cache item`);
+        if (item._ref == null) return; // if unused item
         item._ref! --;
         if (item._ref === 0) {
             if (item.size > memcache.maximum) {
@@ -151,6 +151,7 @@ export namespace memcache {
             if (node.size > memcache.maximum) return;
             if (node._ref != null) throw Error(`already registered cache item`);
             node._ref = 1;
+            node._key = key;
             this.map.set(key, node);
             node._map = this.map;
         }

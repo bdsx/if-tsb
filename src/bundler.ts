@@ -17,12 +17,13 @@ import { changeExt, concurrent, getScriptKind, parsePostfix, splitContent } from
 import { ValueLock } from "./valuelock";
 import globToRegExp = require('glob-to-regexp');
 import colors = require('colors');
+import { NameMap } from "./namemap";
 
 const libmap = new Map<string, Bundler>();
 type WritingLock = ValueLock<[FileWriter, FileWriter|null]>;
 
 export class Bundler {
-    private readonly names = new Map<string, BundlerModuleId>();
+    private readonly names = new NameMap<BundlerModuleId>();
 
     private mapgen:SourceMap|null = null;
     private sourceMapLineOffset = 0;
@@ -51,6 +52,7 @@ export class Bundler {
     public readonly useStrict:boolean;
 
     private readonly moduleByName = new Map<string, BundlerModule>();
+    private readonly globalDeclarationModules:string[] = [];
     public readonly deplist:string[] = [];
     public readonly taskQueue:ConcurrencyQueue;
     public readonly tsconfigMtime:number;
@@ -289,17 +291,7 @@ export class Bundler {
     }
 
     allocModuleVarName(module:BundlerModuleId, name:string):void {
-        name = identifierValidating(name);
-        if (this.names.has(name)) {
-            const base = name;
-            let num = 2;
-            for (;;)
-            {
-                name = base + num;
-                if (!this.names.has(name)) break;
-                num++;
-            }
-        }
+        name = this.names.getFreeName(name);
         this.names.set(name, module);
         module.varName = name;
     }
@@ -325,7 +317,7 @@ export class Bundler {
             try {
                 this.mapgen!.append(refined.id.apath, refined.sourceMapText, offset);
             } catch (err) {
-                module.error(null, IfTsbError.InternalError, `Invalid source map (${refined.sourceMapText.substr(0, 16)})`);
+                module.error(null, IfTsbError.InternalError, `Invalid source map, ${err.message} (${refined.sourceMapText.substr(0, 16)})`);
             }
         }
     }
@@ -416,6 +408,7 @@ export class Bundler {
             this.entryModuleIsAccessed = true;
             return;
         }
+        this.deplist.push(module.id.apath);
 
         this.writingCounter.increase();
         await this.taskQueue.run(module.id.varName, async()=>{
@@ -435,7 +428,6 @@ export class Bundler {
                         lock.unlock();
                     }
                 } else {
-                    this.deplist.push(module.id.apath);
                     this._appendChildren(lock, module, refined);
                     await this.write(lock, module, refined);
                     memcache.release(refined);
@@ -446,6 +438,9 @@ export class Bundler {
     }
         
     private _appendChildren(lock:WritingLock, module:BundlerModule, refined:RefinedModule):void {
+        if (refined.globalDeclaration !== null) {
+            this.globalDeclarationModules.push(refined.globalDeclaration);
+        }
         if (module.children.length === 0) {
             module.importLines.length = 0;
 
@@ -551,13 +546,6 @@ export class Bundler {
                     await jsWriter.write(`};\n`);
                     this.sourceMapLineOffset ++;
                 }
-            },async()=>{
-                if (dtsWriter === null) return;
-                await dtsWriter.write('}\n');
-                for (const module of this.dtsPreloadModules) {
-                    await dtsWriter.write(`import ${this.globalVarName}_${module.varName} = require('${module.apath}');\n`);
-                    this.sourceMapLineOffset ++;
-                }
             }
         );
         
@@ -566,7 +554,7 @@ export class Bundler {
             memcache.release(entryRefined!);
         }
 
-        const saveProm = (async()=>{
+        const saveProm = concurrent(async()=>{
             await jsWriter.write('\n');
             if (this.entryModuleIsAccessed) {
                 await jsWriter.write(`${this.globalVarName}.entry=module.exports;\n`);
@@ -590,7 +578,21 @@ export class Bundler {
                     break;
                 }
             }
-        })();
+        }, async()=>{
+            if (dtsWriter === null) return;
+            await dtsWriter.write('}\n');
+            for (const module of this.dtsPreloadModules) {
+                await dtsWriter.write(`import ${this.globalVarName}_${module.varName} = require('${module.apath}');\n`);
+                this.sourceMapLineOffset ++;
+            }
+            for (const content of this.globalDeclarationModules) {
+                await dtsWriter.write(content);
+            }
+            this.globalDeclarationModules.length = 0;
+            if (entryModule !== null) {
+                await dtsWriter.write(`export = ${this.globalVarName}.${entryModule!.id.varName};\n`);   
+            }
+        });
 
         if (this.tsoptions.sourceMap) {
             if (this.inlineSourceMap) {
@@ -655,6 +657,7 @@ export class Bundler {
         this.sourceMapLineOffset = 0;
         this.lock = null;
         this.moduleByName.clear();
+        this.globalDeclarationModules.length = 0;
     }
 
     getModule(apath:string, mpath?:string|null):BundlerModule {
