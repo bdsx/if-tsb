@@ -863,7 +863,6 @@ export class BundlerModule {
                     }
                 }
             }
-            debugger;
             bundler.program = ts.createProgram([...allowedSources], tsoptions, compilerHost, bundler.program, diagnostics);
             typeChecker = bundler.program.getTypeChecker();
             if (bundler.verbose) console.log(`emit ${moduleAPath} ${new Date(sourceMtime).toLocaleTimeString()}`);
