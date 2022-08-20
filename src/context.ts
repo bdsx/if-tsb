@@ -348,7 +348,7 @@ export class BundlerMainContext implements Reporter {
                 return this._makeBundlers(
                     output, 
                     basedir,
-                    configPath,
+                    null,
                     parsed.options);
             } else {
                 let basedir:string;
