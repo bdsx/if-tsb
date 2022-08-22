@@ -70,13 +70,16 @@ function isRootIdentifier(node:ts.EntityName):boolean {
         return true;
     }
 }
-
 function hasModifier(node:ts.Node, kind:ts.SyntaxKind):boolean {
     if (node.modifiers == null) return false;
     for (const mod of node.modifiers) {
         if (mod.kind === kind) return true;
     }
     return false;
+}
+function nameEquals(node:ts.MemberName, name:string):boolean {
+    if (node.kind !== ts.SyntaxKind.Identifier) return false;
+    return (node as ts.Identifier).text === name;
 }
 
 export class ImportInfo {
@@ -355,6 +358,7 @@ export class BundlerModule {
         let useDirName = false;
         let useFileName = false;
         let useModule = false;
+        let useModuleExports = false;
         let useExports = false;
         let exportEquals = false;
         let moduleDeclaration = '';
@@ -406,12 +410,21 @@ export class BundlerModule {
                 case ts.SyntaxKind.Identifier: {
                     const node = _node as ts.Identifier;
                     const parent = helper.getParentNode();
-                    if (parent && parent.kind === ts.SyntaxKind.PropertyAccessExpression) break;
+                    let right:ts.MemberName|null = null;
+                    if (parent != null && parent.kind === ts.SyntaxKind.PropertyAccessExpression) {
+                        right = (parent as ts.PropertyAccessExpression).name;
+                        if (right === node) break;
+                    }
                     switch (node.text)
                     {
                     case '__dirname': useDirName = true; break;
                     case '__filename': useFileName = true; break;
-                    case 'module': useModule = true; break;
+                    case 'module':
+                        useModule = true;
+                        if (right !== null && nameEquals(right, 'exports')) {
+                            useModuleExports = true;
+                        }
+                        break;
                     case 'exports': useExports = true; break;
                     } 
                     break;
@@ -892,7 +905,6 @@ export class BundlerModule {
                 try {
                     const dtsSourceFile = getSourceFile(dtsPath);
                     dtsFilePath = dtsSourceFile.fileName;
-                    debugger;
                     const res = ts.transform(dtsSourceFile, transformer.afterDeclarations, bundler.tsoptions);
                     declaration = printer.printFile(res.transformed[0]);
                 } catch (err) {
@@ -998,7 +1010,7 @@ export class BundlerModule {
                 case ExportRule.Var:
                     if (useExports)
                     {
-                        if (useModule)
+                        if (useModuleExports)
                         {
                             refined.content += `return module.exports;\n`;
                         }
@@ -1016,7 +1028,7 @@ export class BundlerModule {
             }
             else
             {
-                if (useModule) refined.content += `return ${bundler.globalVarName}.${refined.id.varName}.exports=module.exports;\n`;
+                if (useModuleExports) refined.content += `return ${bundler.globalVarName}.${refined.id.varName}.exports=module.exports;\n`;
                 else refined.content += `return exports;\n`;
                 refined.content += `},\n`;
             }
@@ -1122,7 +1134,7 @@ class RefineHelper {
     ) {
     }
 
-    getParentNode():ts.Node {
+    getParentNode():ts.Node|undefined {
         return this.stacks[this.stacks.length-1];
     }
     getErrorPosition():ErrorPosition|null{

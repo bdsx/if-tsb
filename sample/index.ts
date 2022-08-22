@@ -1,9 +1,10 @@
 
+import value = require('./moduleexport');
 import './declaremodule';
 
 export let x = 0;
 
-let b:number;
+let b:number = value.v;
 interface A {
 
 }
