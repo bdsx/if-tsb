@@ -239,6 +239,10 @@ export function getScriptKind(filepath:string):{kind:ts.ScriptKind, ext:string}
     return {kind, ext};
 }
 
+export function stripExt(filepath:string):string {
+    return filepath.substr(0, filepath.length-getScriptKind(filepath).ext.length);
+}
+
 export function parsePostfix(str:string|number|undefined):number|undefined
 {
     switch (typeof str)

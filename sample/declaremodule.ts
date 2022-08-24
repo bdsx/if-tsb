@@ -4,6 +4,12 @@ import {Dir as Dir2} from 'fs';
 
 export class Test {
 }
+declare global {
+    interface GlobalCls {
+    }
+}
+
+type GlobalClsRef = GlobalCls;
 
 declare module "." {
     let fromDeclaredModule:Test2;
@@ -13,6 +19,19 @@ declare module "." {
     let fs_dir:fs2.Dir;
     let imported:Test4;
     let number:number;
+    let globalCls:GlobalCls;
+    let globalClsRef:GlobalClsRef;
+
+    interface Template<T> {
+        v:T;
+        is(v:any):v is T;
+        t:IterableIterator<number>;
+    }
+
+    interface DeclaredType {
+    }
+
+    let test:DeclaredType;
 }
 
 export let a = new Test;

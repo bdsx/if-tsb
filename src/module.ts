@@ -10,7 +10,7 @@ import { namelock } from "./namelock";
 import { SourceFileData } from "./sourcefilecache";
 import { WriterStream as FileWriter } from './streamwriter';
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
-import { count, getScriptKind, makeImportModulePath, ParsedImportPath, printDiagnostrics, SkipableTaskQueue } from "./util";
+import { count, getScriptKind, makeImportModulePath, ParsedImportPath, printDiagnostrics, SkipableTaskQueue, stripExt } from "./util";
 import path = require('path');
 import ts = require("typescript");
 export const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
@@ -525,12 +525,14 @@ export class BundlerModule {
                     if ((node.flags & ts.NodeFlags.Namespace) !== 0) break;
                     if ((node.flags & ts.NodeFlags.GlobalAugmentation) !== 0) {
                         helper.stacks.push(_node);
+                        let visited:ts.Node;
                         try {
-                            node = ts.visitEachChild(node, makeVisitAbsoluting(null), ctx);
+                            visited = ts.visitEachChild(node, makeVisitAbsoluting(null, null), ctx);
                         } finally {
                             helper.stacks.pop();
                         }
-                        globalDeclaration += printer.printNode(ts.EmitHint.Unspecified, node, sourceFile);
+                        globalDeclaration += 'declare ';
+                        globalDeclaration += printer.printNode(ts.EmitHint.Unspecified, visited, sourceFile);
                         globalDeclaration += '\n';
                     } else {
                         const importPath = helper.parseImportPath(node.name);
@@ -546,7 +548,8 @@ export class BundlerModule {
                         }
                         helper.stacks.push(_node);
                         try {
-                            node = ts.visitEachChild(node, makeVisitAbsoluting(moduleSourceFile), ctx);
+                            const importAPath = moduleAPath !== null ? stripExt(moduleAPath).replace(/\\/g, '/') : null;
+                            node = ts.visitEachChild(node, makeVisitAbsoluting(importAPath, importPath), ctx);
                         } finally {
                             helper.stacks.pop();
                         }
@@ -692,7 +695,7 @@ export class BundlerModule {
                 }
             }
 
-            const makeVisitAbsoluting = (moduleSourceFile:ts.SourceFile|null)=>{
+            const makeVisitAbsoluting = (importAPath:string|null, importPath:ParsedImportPath|null)=>{
                 const visitAbsoluting = (_node:ts.Node):ts.Node[]|ts.Node|undefined=>{
                     switch (_node.kind) {
                     case ts.SyntaxKind.Identifier: {
@@ -721,22 +724,43 @@ export class BundlerModule {
                                 if (decl.propertyName == null) continue;
                                 return ctx.factory.createQualifiedName(res.node, decl.propertyName);
                             }
+                            case ts.SyntaxKind.Parameter:
+                            case ts.SyntaxKind.TypeParameter:
+                                return _node;
                             default:{
-                                if (_node.parent === _decl) break; 
+                                if (_node.parent === _decl) break;
                                 const source = _decl.getSourceFile();
-                                if (source === sourceFile) {
-                                    if (!isExporting(_decl)) {
-                                        this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Need to export`);
-                                        return _node;
+                                const fullPath = typeChecker.getFullyQualifiedName(symbol);
+                                if (fullPath.startsWith('global.')) return _node;
+                                if (!fullPath.startsWith('"')) {
+                                    if (_decl.kind === ts.SyntaxKind.TypeAliasDeclaration) {
+                                        const alias = _decl as ts.TypeAliasDeclaration;
+                                        if (alias.typeParameters == null) {
+                                            return visitAbsoluting(alias.type);
+                                        }
                                     }
-                                    return ctx.factory.createQualifiedName(ctx.factory.createQualifiedName(transformer.globalVar, this.id.varName), _node as ts.Identifier);
-                                } else if (source === moduleSourceFile) {
-                                    return _node;
-                                } else {
-                                    this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Unexpected reference`);
+                                    this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Need to export`);
                                     return _node;
                                 }
-                                break;
+                                const endIndex = fullPath.indexOf('"', 1);
+                                if (endIndex === -1) {
+                                    this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Unexpected name ${fullPath}`);
+                                    return _node;
+                                }
+                                const filePath = fullPath.substring(1, endIndex);
+                                if (moduleAPath !== null && filePath === importAPath) {
+                                    return _node;
+                                }
+                                if (importPath !== null && filePath === importPath.importName) {
+                                    return _node;
+                                }
+                                const symbolPath = fullPath.substr(endIndex+1).split('.');
+                                if (symbolPath[0] !== '') {
+                                    this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Unexpected name ${fullPath}`);
+                                    return _node;
+                                }
+                                symbolPath[0] = this.id.varName;
+                                return transformer.createQualifiedChain(transformer.globalVar, symbolPath);
                             }
                             }
                         }
@@ -1335,6 +1359,14 @@ abstract class Transformer<T> {
                 moduleId: childModule.id,
             };
         }
+    }
+    
+    createQualifiedChain(base:ts.EntityName, names:string[]):ts.EntityName {
+        let chain:ts.EntityName = base;
+        for (const name of names) {
+            chain = this.factory.createQualifiedName(chain, name);
+        }
+        return chain;
     }
 }
 
