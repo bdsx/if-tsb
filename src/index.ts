@@ -7,7 +7,7 @@ import { BundlerMainContext } from './context';
 import { fsp } from './fsp';
 import { memcache } from './memmgr';
 import { CACHE_MEMORY_DEFAULT, memoryCache } from './module';
-import { getMtime } from './mtimecache';
+import { cachedStat } from './mtimecache';
 import { namelock } from './namelock';
 import { PhaseListener, TsConfig } from './types';
 import { defaultFormatHost, printDiagnostrics, resolved, time, tsbuild, tswatch } from './util';
@@ -40,7 +40,7 @@ export async function bundle(entries?:string[]|null, output?:string|null|TsConfi
         console.error(ctx.getErrorCountString());
     }
     await namelock.waitAll();
-    getMtime.clear();
+    cachedStat.clear();
     return duration[0]*1000+duration[1]/1000000;
 }
 
@@ -67,7 +67,7 @@ export namespace bundle {
         const stat = fs.statSync(configPath);
         if (stat.isDirectory()) {
             configPath = path.join(configPath, 'tsconfig.json');
-            if (!getMtime.existsSync(configPath)) {
+            if (!cachedStat.existsSync(configPath)) {
                 return null;
             }
         } else {
@@ -134,7 +134,7 @@ export namespace bundle {
                 console.log(`[${time()}] ${ctx.getErrorCountString()}. Watching for file changes.`);
                 const duration = process.hrtime(started);
                 console.log(`[${time()}] ${(duration[0]*1000+duration[1]/1000000).toFixed(6)}ms`);
-                getMtime.clear();
+                cachedStat.clear();
 
                 ctx.errorCount = 0;
                 await ctx.saveCacheJson();

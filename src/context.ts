@@ -1,16 +1,16 @@
+import * as colors from 'colors';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as ts from 'typescript';
 import { Bundler } from "./bundler";
 import { cacheDir, cacheMapPath, CACHE_VERSION, getCacheFilePath } from "./cachedir";
 import { fsp } from "./fsp";
 import { BundlerModule, BundlerModuleId } from "./module";
-import { getMtime } from "./mtimecache";
+import { cachedStat } from "./mtimecache";
 import { namelock } from "./namelock";
 import { Reporter } from "./reporter";
 import { IfTsbError, TsConfig } from "./types";
 import { printDiagnostrics } from "./util";
-import path = require('path');
-import fs = require('fs');
-import colors = require('colors');
-import ts = require('typescript');
 
 const defaultCompilerOptions = ts.getDefaultCompilerOptions();
 
@@ -356,10 +356,14 @@ export class BundlerMainContext implements Reporter {
                 if (stat.isDirectory()) {
                     basedir = configPath;
                     const npath = path.join(configPath, 'tsconfig.json');
-                    if (getMtime.existsSync(npath)) {
+                    if (cachedStat.existsSync(npath)) {
                         configPath = npath;
                     } else {
                         configPath = path.join(configPath, 'index.ts');
+                        if (!cachedStat.existsSync(configPath)) {
+                            this.reportMessage(IfTsbError.ModuleNotFound, 'Entry not found');
+                            return [];
+                        }
                     }
                 } else {
                     basedir = path.dirname(configPath);

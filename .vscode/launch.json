@@ -15,7 +15,8 @@
             "args": ["${workspaceFolder}\\src\\cli.ts", ".", "-w"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
-            ]
+            ],
+            "console": "integratedTerminal"
         },
         {
             "type": "node",
@@ -28,7 +29,8 @@
             "args": ["${workspaceFolder}\\src\\cli.ts", "../ftp-kr"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
-            ]
+            ],
+            "console": "integratedTerminal"
         }
     ]
 }

@@ -8,7 +8,7 @@ import { CounterLock } from "./counterlock";
 import { fsp } from "./fsp";
 import { memcache } from "./memmgr";
 import { BundlerModule, BundlerModuleId, CheckState, RefinedModule } from "./module";
-import { getMtime } from "./mtimecache";
+import { cachedStat } from "./mtimecache";
 import { SourceFileCache } from "./sourcefilecache";
 import { SourceMap, SourceMapDirect } from "./sourcemap";
 import { WriterStream as FileWriter, WriterStream } from './streamwriter';
@@ -118,8 +118,7 @@ export class Bundler {
             directoryExists(filepath:string):boolean {
                 try
                 {
-                    const stat = fs.statSync(that.resolvePath(filepath));
-                    return stat.isDirectory();
+                    return cachedStat.sync(that.resolvePath(filepath)).isDirectory();
                 }
                 catch (err)
                 {
@@ -127,7 +126,7 @@ export class Bundler {
                 }
             },
             fileExists(filepath:string):boolean {
-                return getMtime.existsSync(that.resolvePath(filepath));
+                return cachedStat.existsSync(that.resolvePath(filepath));
             },
         }, ts.sys);
 
@@ -135,6 +134,7 @@ export class Bundler {
         this.compilerHost.getCurrentDirectory = ()=>this.sys.getCurrentDirectory();
         this.compilerHost.readFile = fileName=>this.sys.readFile(fileName);
         this.compilerHost.directoryExists = dirName=>this.sys.directoryExists(dirName);
+        this.compilerHost.fileExists = dirName=>this.sys.fileExists(dirName);
         this.compilerHost.getDirectories = dirName=>this.sys.getDirectories(dirName);
 
         if (tsconfig !== null) {

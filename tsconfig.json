@@ -11,6 +11,8 @@
         "noSourceMapWorker": true
     },
     "compilerOptions": {
+        "typeRoots": [ "sample/types" ],
+        "types": [ "node", "sample" ],
         "target": "ES2015",
         "lib": [ "ES2015" ],
         "module": "CommonJS",

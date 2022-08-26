@@ -5,7 +5,7 @@ import { fsp } from "./fsp";
 import { LineStripper } from "./linestripper";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
-import { getMtime } from "./mtimecache";
+import { cachedStat } from "./mtimecache";
 import { namelock } from "./namelock";
 import { SourceFileData } from "./sourcefilecache";
 import { WriterStream as FileWriter } from './streamwriter';
@@ -229,7 +229,7 @@ export class RefinedModule {
         _error:try {
             const cached = memoryCache.take(id.number);
             if (cached != null) {
-                sourceMtime = await getMtime(id.apath);
+                sourceMtime = await cachedStat.mtime(id.apath);
                 if (cached.sourceMtime !== sourceMtime) {
                     memcache.unuse(cached);
                     break _error;
@@ -245,10 +245,10 @@ export class RefinedModule {
                     const cachepath = getCacheFilePath(id.number);
                     let cacheMtime = -1;
                     await Promise.all([
-                        getMtime(cachepath).then(mtime=>{
+                        cachedStat.mtime(cachepath).then(mtime=>{
                             cacheMtime = mtime;
                         }, ()=>{}),
-                        getMtime(id.apath).then(mtime=>{
+                        cachedStat.mtime(id.apath).then(mtime=>{
                             sourceMtime = mtime;
                         }, ()=>{}),
                     ]);
@@ -729,7 +729,6 @@ export class BundlerModule {
                                 return _node;
                             default:{
                                 if (_node.parent === _decl) break;
-                                const source = _decl.getSourceFile();
                                 const fullPath = typeChecker.getFullyQualifiedName(symbol);
                                 if (fullPath.startsWith('global.')) return _node;
                                 if (!fullPath.startsWith('"')) {
@@ -739,6 +738,7 @@ export class BundlerModule {
                                             return visitAbsoluting(alias.type);
                                         }
                                     }
+                                    if ((symbol as any).parent === undefined) return _node; // global expected
                                     this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Need to export`);
                                     return _node;
                                 }
@@ -1283,7 +1283,7 @@ abstract class Transformer<T> {
         const kind = getScriptKind(childmoduleApath);
         if (kind.kind === ts.ScriptKind.External) {
             childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
-            if (!getMtime.existsSync(childmoduleApath)) {
+            if (!cachedStat.existsSync(childmoduleApath)) {
                 this.refined.errored = true;
                 this.module.error(this.importer.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
                 return null;
@@ -1334,7 +1334,7 @@ abstract class Transformer<T> {
         const kind = getScriptKind(childmoduleApath);
         if (kind.kind === ts.ScriptKind.External) {
             childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
-            if (!getMtime.existsSync(childmoduleApath)) {
+            if (!cachedStat.existsSync(childmoduleApath)) {
                 this.refined.errored = true;
                 this.module.error(this.importer.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
                 return null;

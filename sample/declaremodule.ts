@@ -12,6 +12,7 @@ declare global {
 type GlobalClsRef = GlobalCls;
 
 declare module "." {
+    let types:TypesType;
     let fromDeclaredModule:Test2;
     let fromCurrentModule:Test;
     let import_fs_dir:import('fs').Dir;

@@ -3,7 +3,7 @@ import fs = require('fs');
 import path = require('path');
 import { fsp } from './fsp';
 import { memcache } from './memmgr';
-import { getMtime } from './mtimecache';
+import { cachedStat } from './mtimecache';
 
 export class SourceFileData {
     public sourceFile:ts.SourceFile;
@@ -23,25 +23,25 @@ export class SourceFileData {
 
     static loadSync(filename:string, languageVersion:ts.ScriptTarget):SourceFileData {
         const contents = fs.readFileSync(filename, 'utf8');
-        const mtime = getMtime.sync(filename);
+        const mtime = cachedStat.mtimeSync(filename);
         return new SourceFileData(filename, languageVersion, contents, mtime);
         
     }
     static async load(filename:string, languageVersion:ts.ScriptTarget):Promise<SourceFileData> {
         const [contents, mtime] = await Promise.all([
             fsp.readFile(filename), 
-            getMtime(filename),
+            cachedStat.mtime(filename),
         ]);
         return new SourceFileData(filename, languageVersion, contents, mtime);
     }
 
     async isModified():Promise<boolean> {
-        const mtime = await getMtime(this.filename);
+        const mtime = await cachedStat.mtime(this.filename);
         return mtime !== this.mtime;
     }
     
     isModifiedSync():boolean {
-        const mtime = getMtime.sync(this.filename);
+        const mtime = cachedStat.mtimeSync(this.filename);
         return mtime !== this.mtime;
     }
 
