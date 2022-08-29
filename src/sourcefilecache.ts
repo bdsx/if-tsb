@@ -3,7 +3,7 @@ import fs = require('fs');
 import path = require('path');
 import { fsp } from './fsp';
 import { memcache } from './memmgr';
-import { cachedStat } from './mtimecache';
+import { cachedStat } from './cachedstat';
 
 export class SourceFileData {
     public sourceFile:ts.SourceFile;

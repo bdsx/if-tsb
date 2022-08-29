@@ -6,7 +6,7 @@ import { Bundler } from "./bundler";
 import { cacheDir, cacheMapPath, CACHE_VERSION, getCacheFilePath } from "./cachedir";
 import { fsp } from "./fsp";
 import { BundlerModule, BundlerModuleId } from "./module";
-import { cachedStat } from "./mtimecache";
+import { cachedStat } from "./cachedstat";
 import { namelock } from "./namelock";
 import { Reporter } from "./reporter";
 import { IfTsbError, TsConfig } from "./types";

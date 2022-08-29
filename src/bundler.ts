@@ -8,7 +8,7 @@ import { CounterLock } from "./counterlock";
 import { fsp } from "./fsp";
 import { memcache } from "./memmgr";
 import { BundlerModule, BundlerModuleId, CheckState, RefinedModule } from "./module";
-import { cachedStat } from "./mtimecache";
+import { cachedStat } from "./cachedstat";
 import { SourceFileCache } from "./sourcefilecache";
 import { SourceMap, SourceMapDirect } from "./sourcemap";
 import { WriterStream as FileWriter, WriterStream } from './streamwriter';

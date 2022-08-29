@@ -5,7 +5,7 @@ import { fsp } from "./fsp";
 import { LineStripper } from "./linestripper";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
-import { cachedStat } from "./mtimecache";
+import { cachedStat } from "./cachedstat";
 import { namelock } from "./namelock";
 import { SourceFileData } from "./sourcefilecache";
 import { WriterStream as FileWriter } from './streamwriter';

@@ -7,7 +7,7 @@ import { BundlerMainContext } from './context';
 import { fsp } from './fsp';
 import { memcache } from './memmgr';
 import { CACHE_MEMORY_DEFAULT, memoryCache } from './module';
-import { cachedStat } from './mtimecache';
+import { cachedStat } from './cachedstat';
 import { namelock } from './namelock';
 import { PhaseListener, TsConfig } from './types';
 import { defaultFormatHost, printDiagnostrics, resolved, time, tsbuild, tswatch } from './util';
