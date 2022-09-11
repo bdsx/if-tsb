@@ -1,23 +1,22 @@
+import * as path from 'path';
+import * as ts from "typescript";
 import type { Bundler } from "./bundler";
 import { CACHE_SIGNATURE, getCacheFilePath } from "./cachedir";
+import { cachedStat } from "./cachedstat";
 import { ErrorPosition } from "./errpos";
 import { fsp } from "./fsp";
 import { LineStripper } from "./linestripper";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
-import { cachedStat } from "./cachedstat";
 import { namelock } from "./namelock";
 import { SourceFileData } from "./sourcefilecache";
 import { WriterStream as FileWriter } from './streamwriter';
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
-import { count, getScriptKind, makeImportModulePath, ParsedImportPath, printDiagnostrics, SkipableTaskQueue, stripExt } from "./util";
-import path = require('path');
-import ts = require("typescript");
+import { count, getScriptKind, makeImportModulePath, ParsedImportPath, printDiagnostrics, ScriptKind, SkipableTaskQueue } from "./util";
 export const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
 memcache.maximum = CACHE_MEMORY_DEFAULT;
 export const memoryCache = new memcache.Map<number, RefinedModule>();
 
-const printer = ts.createPrinter();
 const builtin = new Set<string>([
     'assert',
     'buffer',
@@ -124,6 +123,32 @@ export class ImportInfo {
 
 }
 
+class MtimeChecker {
+    private readonly list:Promise<number>[] = [];
+    add(apath:string):void {
+        this.list.push(cachedStat.mtime(apath));
+    }
+    addOpts(apath:string):void {
+        this.list.push(cachedStat.mtime(apath).catch(()=>-1));
+    }
+    addDecl(bundler:Bundler, apath:string):void {
+        if (!bundler.declaration) {
+            this.list.push(Promise.resolve(-1));
+            return;
+        }
+        const kind = getScriptKind(apath);
+        if (kind.kind !== ts.ScriptKind.JS) {
+            this.list.push(Promise.resolve(-1));
+            return;
+        }
+        this.list.push(cachedStat.mtime(kind.modulePath+'.d.ts').catch(err=>-1));
+    }
+
+    wait():Promise<number[]> {
+        return Promise.all(this.list);
+    }
+}
+
 export class RefinedModule {
     firstLineComment:string|null = null;
     sourceMapOutputLineOffset:number = 0;
@@ -136,6 +161,7 @@ export class RefinedModule {
     size:number;
     errored = false;
     sourceMtime:number;
+    dtsMtime:number;
     tsconfigMtime:number;
 
     private mtime:number|null = null;
@@ -169,6 +195,7 @@ export class RefinedModule {
                 await namelock.lock(this.id.number);
                 const writer = new FileWriter(getCacheFilePath(this.id.number));
                 await writer.write(this.sourceMtime+'\0');
+                await writer.write(this.dtsMtime+'\0');
                 await writer.write(this.tsconfigMtime+'\0');
                 await writer.write(ImportInfo.stringify(this.imports)+'\0');
                 await writer.write(this.firstLineComment ? this.firstLineComment+'\0' : '\0');
@@ -200,6 +227,7 @@ export class RefinedModule {
         if (!content.endsWith(CACHE_SIGNATURE)) return false;
         const [
             sourceMtime,
+            dtsMtime,
             tsconfigMtime,
             imports, 
             firstLineComment, 
@@ -211,6 +239,7 @@ export class RefinedModule {
             globalDeclaration,
         ] = content.split('\0');
         this.sourceMtime = +sourceMtime;
+        this.dtsMtime = +dtsMtime;
         this.tsconfigMtime = +tsconfigMtime;
         this.imports = imports === '' ? [] : ImportInfo.parse(imports);
         this.firstLineComment = firstLineComment || null;
@@ -224,38 +253,46 @@ export class RefinedModule {
         return true;
     }
 
-    static async getRefined(id:BundlerModuleId, tsconfigMtime:number):Promise<{refined:RefinedModule|null, sourceMtime:number}> {
+    static async getRefined(bundler:Bundler, id:BundlerModuleId):Promise<{refined:RefinedModule|null, sourceMtime:number, dtsMtime:number}> {
         let sourceMtime = -1;
+        let dtsMtime = -1;
         _error:try {
             const cached = memoryCache.take(id.number);
             if (cached != null) {
-                sourceMtime = await cachedStat.mtime(id.apath);
+                const prom = new MtimeChecker;
+                prom.add(id.apath);
+                prom.addDecl(bundler, id.apath);
+                const [srcmtime, dtsmtime] = await prom.wait();
+                sourceMtime = srcmtime;
+                dtsMtime = dtsmtime;
                 if (cached.sourceMtime !== sourceMtime) {
                     memcache.unuse(cached);
                     break _error;
                 }
-                if (cached.tsconfigMtime !== tsconfigMtime) {
+                if (dtsMtime !== -1 && cached.dtsMtime !== dtsMtime) {
                     memcache.unuse(cached);
                     break _error;
                 }
-                return {refined:cached, sourceMtime};
+                if (cached.tsconfigMtime !== bundler.tsconfigMtime) {
+                    memcache.unuse(cached);
+                    break _error;
+                }
+                return {refined:cached, sourceMtime, dtsMtime};
             } else {
                 try {
                     await namelock.lock(id.number);
                     const cachepath = getCacheFilePath(id.number);
-                    let cacheMtime = -1;
-                    await Promise.all([
-                        cachedStat.mtime(cachepath).then(mtime=>{
-                            cacheMtime = mtime;
-                        }, ()=>{}),
-                        cachedStat.mtime(id.apath).then(mtime=>{
-                            sourceMtime = mtime;
-                        }, ()=>{}),
-                    ]);
-                    
+                    const checker = new MtimeChecker;
+                    checker.addOpts(cachepath);
+                    checker.addOpts(id.apath);
+                    checker.addDecl(bundler, id.apath);
+                    const [cacheMtime, srcmtime, dtsmtime] = await checker.wait();
+                    sourceMtime = srcmtime;
+                    dtsMtime = dtsmtime;
                     if (cacheMtime === -1) break _error;
-                    if (cacheMtime < tsconfigMtime) break _error;
-                    if (cacheMtime < sourceMtime) break _error;
+                    if (cacheMtime < bundler.tsconfigMtime) break _error;
+                    if (cacheMtime < srcmtime) break _error;
+                    if (bundler.declaration && dtsmtime !== -1 && cacheMtime < dtsmtime) break _error;
                 } finally {
                     namelock.unlock(id.number);
                 }
@@ -264,15 +301,16 @@ export class RefinedModule {
                 memoryCache.register(id.number, refined);
                 if (!loaded) break _error;
                 if (refined.sourceMtime !== sourceMtime) break _error;
-                if (refined.tsconfigMtime !== tsconfigMtime) break _error;
-                return {refined, sourceMtime};
+                if (refined.dtsMtime !== dtsMtime) break _error;
+                if (refined.tsconfigMtime !== bundler.tsconfigMtime) break _error;
+                return {refined, sourceMtime, dtsMtime};
             }
         } catch (err) {
             if (err.code !== 'ENOENT') {
                 throw err;
             }
         }
-        return {refined:null, sourceMtime};
+        return {refined:null, sourceMtime, dtsMtime};
     }
     
 }
@@ -341,9 +379,9 @@ export class BundlerModule {
         return makeImportModulePath(this.mpath, this.id.apath, mpath);
     }
 
-    private async _refine(sourceMtime:number):Promise<RefinedModule|null> {
+    private async _refine(sourceMtime:number, dtsMtime:number):Promise<RefinedModule|null> {
         if (sourceMtime === -1) {
-            this.error(null, IfTsbError.ModuleNotFound, `Cannot find module ${this.mpath}`);
+            this.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${this.mpath}'`);
             return null;
         }
 
@@ -353,6 +391,7 @@ export class BundlerModule {
         const refined = new RefinedModule(this.id);
         refined.content = `// ${this.rpath}\n`;
         refined.sourceMtime = sourceMtime;
+        refined.dtsMtime = dtsMtime;
         refined.tsconfigMtime = this.bundler.tsconfigMtime;
 
         let useDirName = false;
@@ -532,6 +571,7 @@ export class BundlerModule {
                             helper.stacks.pop();
                         }
                         globalDeclaration += 'declare ';
+                        const printer = ts.createPrinter();
                         globalDeclaration += printer.printNode(ts.EmitHint.Unspecified, visited, sourceFile);
                         globalDeclaration += '\n';
                     } else {
@@ -548,7 +588,7 @@ export class BundlerModule {
                         }
                         helper.stacks.push(_node);
                         try {
-                            const importAPath = moduleAPath !== null ? stripExt(moduleAPath).replace(/\\/g, '/') : null;
+                            const importAPath = moduleAPath !== null ? getScriptKind(moduleAPath).modulePath.replace(/\\/g, '/') : null;
                             node = ts.visitEachChild(node, makeVisitAbsoluting(importAPath, importPath), ctx);
                         } finally {
                             helper.stacks.pop();
@@ -558,6 +598,7 @@ export class BundlerModule {
                             [ctx.factory.createModifier(ts.SyntaxKind.ExportKeyword)], 
                             ctx.factory.createIdentifier(res!.moduleId!.varName),
                             node.body, ts.NodeFlags.Namespace);
+                        const printer = ts.createPrinter();
                         moduleDeclaration += printer.printNode(ts.EmitHint.Unspecified, nsnode, sourceFile);
                         moduleDeclaration += '\n';
                     }
@@ -699,6 +740,7 @@ export class BundlerModule {
                 const visitAbsoluting = (_node:ts.Node):ts.Node[]|ts.Node|undefined=>{
                     switch (_node.kind) {
                     case ts.SyntaxKind.Identifier: {
+                        if (_node.parent == null) break;
                         const symbol = typeChecker.getSymbolAtLocation(_node);
                         if (symbol == null) break;
                         if (symbol.declarations == null) break;
@@ -925,11 +967,12 @@ export class BundlerModule {
             }
 
             if (this.needDeclaration && moduleinfo.kind === ts.ScriptKind.JS) {
-                const dtsPath = moduleAPath.substr(0, moduleAPath.length - moduleinfo.ext.length)+'.d.ts';
+                const dtsPath = moduleinfo.modulePath + '.d.ts';
                 try {
                     const dtsSourceFile = getSourceFile(dtsPath);
                     dtsFilePath = dtsSourceFile.fileName;
                     const res = ts.transform(dtsSourceFile, transformer.afterDeclarations, bundler.tsoptions);
+                    const printer = ts.createPrinter();
                     declaration = printer.printFile(res.transformed[0]);
                 } catch (err) {
                     if (err.code !== 'ENOENT') throw err;
@@ -1115,13 +1158,13 @@ export class BundlerModule {
     }
 
     async refine():Promise<RefinedModule|null> {
-        let {refined, sourceMtime} = await RefinedModule.getRefined(this.id, this.bundler.tsconfigMtime);
+        let {refined, sourceMtime, dtsMtime} = await RefinedModule.getRefined(this.bundler, this.id);
         if (refined === null || 
             refined.errored || 
             (this.needDeclaration && refined.declaration === null) || !refined.checkRelativePath(this.rpath) ||
             (await this._checkExternalChanges(refined))) {
             if (refined !== null) memcache.unuse(refined);
-            refined = await this._refine(sourceMtime);
+            refined = await this._refine(sourceMtime, dtsMtime);
             if (refined === null) return null;
             memoryCache.register(refined.id.number, refined);
         }
@@ -1141,10 +1184,14 @@ export class BundlerModule {
     }
 }
 
-export interface BundlerModuleId {
-    number:number;
-    varName:string;
-    apath:string;
+export class BundlerModuleId {
+    public readonly kind:ScriptKind;
+    constructor(
+        public readonly number:number,
+        public readonly varName:string,
+        public readonly apath:string) {
+        this.kind = getScriptKind(apath);
+    }
 }
 
 class RefineHelper {
@@ -1282,7 +1329,7 @@ abstract class Transformer<T> {
         let childmoduleApath = path.isAbsolute(info.resolvedFileName) ? path.join(info.resolvedFileName) : path.join(this.bundler.basedir, info.resolvedFileName);
         const kind = getScriptKind(childmoduleApath);
         if (kind.kind === ts.ScriptKind.External) {
-            childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
+            childmoduleApath = kind.modulePath+'.js';
             if (!cachedStat.existsSync(childmoduleApath)) {
                 this.refined.errored = true;
                 this.module.error(this.importer.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);

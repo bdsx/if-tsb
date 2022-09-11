@@ -1,6 +1,7 @@
 
 import value = require('./moduleexport');
 import './declaremodule';
+import './jsfile';
 
 export let x = 0;
 

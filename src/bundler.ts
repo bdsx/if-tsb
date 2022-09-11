@@ -1,14 +1,15 @@
 import ts = require("typescript");
 import path = require("path");
 import fs = require("fs");
+import { cachedStat } from "./cachedstat";
 import { identifierValidating } from "./checkvar";
 import { ConcurrencyQueue } from "./concurrent";
-import { BundlerMainContext } from "./context";
+import { BundlerMainContext, IdMap } from "./context";
 import { CounterLock } from "./counterlock";
 import { fsp } from "./fsp";
 import { memcache } from "./memmgr";
 import { BundlerModule, BundlerModuleId, CheckState, RefinedModule } from "./module";
-import { cachedStat } from "./cachedstat";
+import { NameMap } from "./namemap";
 import { SourceFileCache } from "./sourcefilecache";
 import { SourceMap, SourceMapDirect } from "./sourcemap";
 import { WriterStream as FileWriter, WriterStream } from './streamwriter';
@@ -17,7 +18,6 @@ import { changeExt, concurrent, getScriptKind, parsePostfix, splitContent } from
 import { ValueLock } from "./valuelock";
 import globToRegExp = require('glob-to-regexp');
 import colors = require('colors');
-import { NameMap } from "./namemap";
 
 const libmap = new Map<string, Bundler>();
 type WritingLock = ValueLock<[FileWriter, FileWriter|null]>;
@@ -64,7 +64,7 @@ export class Bundler {
     public readonly noSourceMapWorker:boolean;
     public readonly jsPreloadModules = new Set<BundlerModuleId>();
     public readonly dtsPreloadModules = new Set<BundlerModuleId>();
-    private readonly cache:Record<string, BundlerModuleId>;
+    private readonly idmap:IdMap;
     public readonly sourceFileCache:SourceFileCache;
     private readonly entryApath:string|null = null;
     private readonly inlineSourceMap:boolean;
@@ -82,7 +82,7 @@ export class Bundler {
         public readonly tsconfig:string|null,
         public readonly tsoptions:ts.CompilerOptions,
         public readonly tsconfigContent:TsConfig) {
-        this.cache = main.getCacheMap(resolvedOutput);
+        this.idmap = main.getCacheMap(resolvedOutput);
         if (tsoptions.noEmitOnError === true) {
             main.reportMessage(IfTsbError.Unsupported, 'noEmitOnError is ignored by if-tsb', true);
         }
@@ -245,23 +245,17 @@ export class Bundler {
     }
 
     getModuleId(apath:string, mode:ExternalMode):BundlerModuleId {
-        let id = this.cache[apath];
+        let id = this.idmap.get(apath);
         if (id === undefined) {
-            id = {
-                number: mode === ExternalMode.NoExternal ? this.main.allocateCacheId() : mode,
-                apath,
-                varName: ''
-            };
-
+            const number = mode === ExternalMode.NoExternal ? this.main.allocateCacheId() : mode;
             let varName = path.basename(apath);
             const dotidx = varName.lastIndexOf('.');
             if (dotidx !== -1) varName = varName.substr(0, dotidx);
             if (varName === 'index') {
                 varName = path.basename(path.dirname(apath));
             }
-            this.allocModuleVarName(id, varName);
-
-            this.cache[apath] = id;
+            id = this.allocModuleVarName(number, varName, apath);
+            this.idmap.set(apath, id);
             this.main.cacheJsonModified = true;
         } else {
             if (id.number < 0 && id.number !== mode) {
@@ -272,9 +266,9 @@ export class Bundler {
     }
 
     deleteModuleId(apath:string):boolean {
-        const id = this.cache[apath];
+        const id = this.idmap.get(apath);
         if (id == null) return false;
-        delete this.cache[apath];
+        this.idmap.delete(apath);
         this.main.freeCacheId(id.number);
         this.deleteModuleVarName(id.varName);
         return true;
@@ -284,16 +278,17 @@ export class Bundler {
         return path.isAbsolute(filepath) ? path.join(filepath) : path.join(this.basedir, filepath);
     }
 
-    addModuleVarName(module:BundlerModuleId):BundlerModuleId|null {
-        const old = this.names.get(module.varName);
-        this.names.set(module.varName, module);
+    addModuleVarName(moduleId:BundlerModuleId):BundlerModuleId|null {
+        const old = this.names.get(moduleId.varName);
+        this.names.set(moduleId.varName, moduleId);
         return old || null;
     }
 
-    allocModuleVarName(module:BundlerModuleId, name:string):void {
+    allocModuleVarName(number:number, name:string, apath:string):BundlerModuleId {
         name = this.names.getFreeName(name);
-        this.names.set(name, module);
-        module.varName = name;
+        const moduleId = new BundlerModuleId(number, name, apath);
+        this.names.set(name, moduleId);
+        return moduleId;
     }
 
     deleteModuleVarName(name:string):boolean {
@@ -409,6 +404,14 @@ export class Bundler {
             return;
         }
         this.deplist.push(module.id.apath);
+        const kind = getScriptKind(module.id.apath);
+        let prom:Promise<void>|undefined;
+        if (kind.kind === ts.ScriptKind.JS && this.declaration) {
+            const dtsPath = kind.modulePath+'.d.ts';
+            prom = cachedStat.exists(dtsPath).then(exists=>{
+                if (exists) this.deplist.push(dtsPath);
+            });
+        }
 
         this.writingCounter.increase();
         await this.taskQueue.run(module.id.varName, async()=>{
@@ -435,6 +438,7 @@ export class Bundler {
                 this.writingCounter.decrease();
             })();
         });
+        await prom;
     }
         
     private _appendChildren(lock:WritingLock, module:BundlerModule, refined:RefinedModule):void {
@@ -523,13 +527,13 @@ export class Bundler {
                     this.sourceMapLineOffset ++;
                 }
         
-                if ('__resolve' in this.cache) {
+                if (this.idmap.has('__resolve')) {
                     if (this.tsoptions.target! >= ts.ScriptTarget.ES2015) {
                         await jsWriter.write(`__resolve(rpath){\n`);
                     } else {
                         await jsWriter.write(`__resolve:function(rpath){\n`);
                     }
-                    const path = this.cache.path;
+                    const path = this.idmap.get('path')!;
                     await jsWriter.write(`return this.${path.varName}.join(this.__dirname, rpath);\n},\n`);
                     if (this.tsoptions.target! >= ts.ScriptTarget.ES2015) {
                         await jsWriter.write(`__dirname,\n`);
@@ -665,7 +669,8 @@ export class Bundler {
         if (module == null) {
             if (mpath == null) {
                 const filename = path.basename(apath);
-                mpath = './'+filename.substr(0, filename.length - getScriptKind(filename).ext.length);
+                const kind = getScriptKind(filename);
+                mpath = './'+kind.moduleName;
             }
     
             module = new BundlerModule(this, mpath, apath);

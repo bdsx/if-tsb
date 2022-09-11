@@ -217,7 +217,22 @@ _kindMap.set('.JS', ts.ScriptKind.JS);
 _kindMap.set('.JSX', ts.ScriptKind.JSX);
 _kindMap.set('.JSON', ts.ScriptKind.JSON);
 
-export function getScriptKind(filepath:string):{kind:ts.ScriptKind, ext:string}
+export class ScriptKind {
+    constructor(
+        public readonly kind:ts.ScriptKind,
+        public readonly ext:string,
+        public readonly apath:string,
+    ) {}
+    get moduleName():string {
+        const baseName = path.basename(this.apath);
+        return baseName.substr(0, baseName.length - this.ext.length);
+    }
+    get modulePath():string {
+        return this.apath.substr(0, this.apath.length - this.ext.length);
+    }
+}
+
+export function getScriptKind(filepath:string):ScriptKind
 {
     let ext = path.extname(filepath).toUpperCase();
     let kind = _kindMap.get(ext) || ts.ScriptKind.Unknown;
@@ -236,11 +251,7 @@ export function getScriptKind(filepath:string):{kind:ts.ScriptKind, ext:string}
         }
         break;
     }
-    return {kind, ext};
-}
-
-export function stripExt(filepath:string):string {
-    return filepath.substr(0, filepath.length-getScriptKind(filepath).ext.length);
+    return new ScriptKind(kind, ext, filepath);
 }
 
 export function parsePostfix(str:string|number|undefined):number|undefined

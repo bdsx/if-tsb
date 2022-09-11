@@ -39,9 +39,15 @@ function getOutFileName(options:TsConfig, name:string):string
 
 let instance:Promise<BundlerMainContext>|null = null;
 
+type IdMapJson = Record<string, Record<string, {number:number, varName:string}>&{$cacheTo?:number}> & {version:string};
+
+export class IdMap extends Map<string, BundlerModuleId> {
+    cacheTo?:number;
+}
+
 export class BundlerMainContext implements Reporter {
     public errorCount = 0;
-    private readonly cache:Record<string, Record<string, BundlerModuleId>>;
+    private readonly idmap:Map<string, IdMap>;
     private readonly accessedOutputs = new Set<string>();
     private readonly cacheUnusingId = new Set<number>();
     private lastCacheId = -1;
@@ -50,37 +56,35 @@ export class BundlerMainContext implements Reporter {
     public cacheJsonNeedResave = false;
     private readonly outputs = new Set<string>();
 
-    private constructor(cache:any) {
+    private constructor(caches:IdMapJson) {
         process.on('exit', ()=>this.saveCacheJsonSync());
         
         try {
-            if (cache.version !== CACHE_VERSION) {
-                this.cache = {};
+            if (caches.version !== CACHE_VERSION) {
+                this.idmap = new Map;
                 this.lastCacheId = -1;
                 return;
             }
-            delete cache.version;
-            this.cache = cache;
+            this.idmap = new Map;
             let count = 0;
             const using = new Set<number>();
-            for (const entryApath in this.cache) {
-                const cache = this.cache[entryApath];
+            for (const entryApath in caches) {
+                const cache = caches[entryApath];
+                const out = new IdMap;
+                this.idmap.set(entryApath, out);
+
                 for (const apath in cache) {
                     const id = cache[apath];
-                    cache[apath] = {
-                        number: id.number,
-                        varName: id.varName,
-                        apath
-                    };
                     if (id.number >= 0) {
                         if (using.has(id.number)) {
                             console.error(colors.red(`if-tsb: cache file is corrupted (${apath})`));
-                            delete cache[apath];
+                            continue;
                         } else {
                             count++;
                             using.add(id.number);
                         }
                     }
+                    out.set(apath, new BundlerModuleId(id.number, id.varName, apath));
                 }
             }
             for (let i=0; count !== 0; i++) {
@@ -92,7 +96,7 @@ export class BundlerMainContext implements Reporter {
                 this.cacheUnusingId.add(i);
             }
         } catch (err) {
-            this.cache = {};
+            this.idmap = new Map;
             this.lastCacheId = -1;
         }
     }
@@ -112,17 +116,17 @@ export class BundlerMainContext implements Reporter {
     }
 
     getCacheJson():any {
-        const output:Record<string, any> = {};
-        output.version = CACHE_VERSION;
-        for (const outputpath in this.cache) {
-            const cache = this.cache[outputpath];
-            const outcache:Record<string,any> = output[outputpath] = {};
-            for (const apath in cache) {
-                const id = cache[apath];
-                outcache[apath] = {
+        const output = {version:CACHE_VERSION} as IdMapJson;
+        for (const [outputpath, cache] of this.idmap) {
+            const outcache = output[outputpath] = {} as IdMapJson[string];
+            for (const id of cache.values()) {
+                outcache[id.apath] = {
                     number:id.number,
                     varName:id.varName
                 };
+                if (cache.cacheTo != null) {
+                    outcache.$cacheTo = cache.cacheTo;
+                }
             }
         }
         return output;
@@ -131,14 +135,13 @@ export class BundlerMainContext implements Reporter {
     private _cleanBeforeSave():void {
         const now = Date.now();
         const next = now + 24 * 60 * 60 * 1000;
-        for (const output in this.cache) {
-            const cache = this.cache[output];
+        for (const [output, cache] of this.idmap) {
             if (this.accessedOutputs.has(output)) {
-                cache.$cacheTo = next as any;
+                cache.cacheTo = next;
             } else {
-                const cacheTo = cache.$cacheTo as any as number;
+                const cacheTo = cache.cacheTo;
                 if (cacheTo == null || now > cacheTo) {
-                    delete this.cache[output];
+                    this.idmap.delete(output);
                     this.cacheJsonModified = true;
                 }
             }
@@ -211,23 +214,23 @@ export class BundlerMainContext implements Reporter {
             return `Found ${this.errorCount} errors`;
     }
 
-    private async _removeCache(bundler:Bundler, cache:Record<string, BundlerModuleId>, id:BundlerModuleId):Promise<void> {
+    private async _removeCache(bundler:Bundler, cache:IdMap, id:BundlerModuleId):Promise<void> {
         console.trace('remove cache');
         bundler.deleteModuleVarName(id.varName);
         if (id.number < 0) return;
-        delete cache[id.apath];
+        cache.delete(id.apath);
         this.freeCacheId(id.number);
         this.cacheJsonModified = true;
     }
 
     clearCache(bundler:Bundler, modules:Map<string, BundlerModule>):void {
-        const map = this.cache[bundler.output];
+        const map = this.idmap.get(bundler.output);
         if (!map) return;
 
         const names = new Set<string>(modules.keys());
-        for (const apath in map) {
+        for (const [apath, id] of map) {
             if (names.has(apath)) continue;
-            this._removeCache(bundler, map, map[apath]);
+            this._removeCache(bundler, map, id);
         }
     }
 
@@ -267,11 +270,13 @@ export class BundlerMainContext implements Reporter {
         }
     }
 
-    getCacheMap(apath:string):Record<string,BundlerModuleId> {
+    getCacheMap(apath:string):IdMap {
         this.accessedOutputs.add(apath);
-        const map = this.cache[apath];
+        let map = this.idmap.get(apath);
         if (map != null) return map;
-        return this.cache[apath] = {};
+        map = new IdMap;
+        this.idmap.set(apath, map);
+        return map;
     }
 
     private _makeBundlers(options:TsConfig, basedir:string, tsconfig:string|null, compilerOptions:ts.CompilerOptions):Bundler[] {
@@ -320,9 +325,8 @@ export class BundlerMainContext implements Reporter {
                     this, basedir, resolvedOutput, newoptions, entryfile, 
                     [], tsconfig, compilerOptions, options);
                 bundlers.push(bundler);
-                const cache = this.cache[bundler.output];
-                for (const apath in cache) {
-                    const moduleId = cache[apath];
+                const cache = this.idmap.get(bundler.output)!;
+                for (const [apath, moduleId] of cache) {
                     const oldid = bundler.addModuleVarName(moduleId);
                     if (oldid !== null) {
                         this._removeCache(bundler, cache, oldid);
