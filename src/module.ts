@@ -11,75 +11,14 @@ import { registerModuleReloader, reloadableRequire } from "./modulereloader";
 import { namelock } from "./namelock";
 import { SourceFileData } from "./sourcefilecache";
 import { WriterStream as FileWriter } from './streamwriter';
+import { tshelper } from './tshelper';
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
-import { count, getScriptKind, makeImportModulePath, ParsedImportPath, printDiagnostrics, ScriptKind, SkipableTaskQueue } from "./util";
+import { count, dirnameModulePath, getScriptKind, joinModulePath, printDiagnostrics, ScriptKind, SkipableTaskQueue } from "./util";
 export const CACHE_MEMORY_DEFAULT = 1024*1024*1024;
 memcache.maximum = CACHE_MEMORY_DEFAULT;
 export const memoryCache = new memcache.Map<number, RefinedModule>();
 
-const builtin = new Set<string>([
-    'assert',
-    'buffer',
-    'child_process',
-    'cluster',
-    'crypto',
-    'dns',
-    'domain',
-    'events',
-    'fs',
-    'http',
-    'https',
-    'net',
-    'os',
-    'path',
-    'punycode',
-    'querystring',
-    'readline',
-    'repl',
-    'stream',
-    'string_decoder',
-    'dgram',
-    'url',
-    'util',
-    'v8',
-    'vm',
-    'zlib',
-]);
 let moduleReloaderRegistered = false;
-
-function isExporting(node:ts.Node):boolean {
-    if (node.parent.kind === ts.SyntaxKind.ExportSpecifier) return true;
-    if (node.modifiers != null) {
-        for (const mod of node.modifiers) {
-            if (mod.kind === ts.SyntaxKind.ExportKeyword) return true;
-        }
-    }
-    return false;
-}
-function isRootIdentifier(node:ts.EntityName):boolean {
-    const parent = node.parent;
-    switch (parent.kind) {
-    case ts.SyntaxKind.PropertyAccessExpression:
-        if ((parent as ts.QualifiedName).left !== node) return false;
-        return isRootIdentifier(parent as ts.QualifiedName);
-    case ts.SyntaxKind.QualifiedName:
-        if ((parent as ts.QualifiedName).left !== node) return false;
-        return isRootIdentifier(parent as ts.QualifiedName);
-    default:
-        return true;
-    }
-}
-function hasModifier(node:ts.Node, kind:ts.SyntaxKind):boolean {
-    if (node.modifiers == null) return false;
-    for (const mod of node.modifiers) {
-        if (mod.kind === kind) return true;
-    }
-    return false;
-}
-function nameEquals(node:ts.MemberName, name:string):boolean {
-    if (node.kind !== ts.SyntaxKind.Identifier) return false;
-    return (node as ts.Identifier).text === name;
-}
 
 export class ImportInfo {
     constructor(
@@ -319,6 +258,64 @@ export enum CheckState {
     None,Entered,Checked,
 }
 
+export class ParsedImportPath {
+    private importAPath:string|null|undefined = undefined;
+    
+    constructor(
+        public readonly helper:RefineHelper,
+        public readonly importName:string,
+        public readonly mpath:string) {
+    }
+
+    literal(factory:ts.NodeFactory):ts.StringLiteral {
+        return factory.createStringLiteral(this.mpath);
+    }
+
+    call(factory:ts.NodeFactory):ts.Expression {
+        const mpathLitral = this.literal(factory);
+        return factory.createCallExpression(factory.createIdentifier('require'), undefined, [mpathLitral]);
+    }
+
+    import(factory:ts.NodeFactory):ts.ExternalModuleReference {
+        const mpathLitral = this.literal(factory);
+        return factory.createExternalModuleReference(mpathLitral);
+    }
+
+    getAbsolutePath():string|null {
+        if (this.importAPath !== undefined) return this.importAPath;
+        const module = this.helper.module;
+        const bundler = module.bundler;
+        let modulePath = ts.nodeModuleNameResolver(this.importName, module.id.apath, bundler.tsoptions, bundler.sys, bundler.moduleResolutionCache);
+        if (!modulePath.resolvedModule && this.importName === '.') 
+            modulePath = ts.nodeModuleNameResolver('./index', module.id.apath, bundler.tsoptions, bundler.sys, bundler.moduleResolutionCache);
+        const info = modulePath.resolvedModule;
+        if (info == null) {
+            this.helper.importError(this.importName);
+            this.importAPath = null;
+        } else {
+            this.importAPath = path.isAbsolute(info.resolvedFileName) ? path.join(info.resolvedFileName) : path.join(bundler.basedir, info.resolvedFileName);
+        }
+        return this.importAPath;
+    }
+
+    getImportAPath():string|null {
+        const moduleAPath = this.getAbsolutePath();
+        return moduleAPath !== null ? getScriptKind(moduleAPath).modulePath.replace(/\\/g, '/') : null;
+    }
+
+    isBuiltInModule():boolean {
+        if (this.importName.startsWith('.')) return false;
+        return tshelper.builtin.has(this.mpath);
+    }
+
+    isExternalModule():boolean {
+        if (this.importName.startsWith('.')) return false;
+        if (tshelper.builtin.has(this.mpath)) return true;
+        if (this.helper.bundler.bundleExternals) return false;
+        return true;        
+    }
+}
+
 export class BundlerModule {
     public readonly id:BundlerModuleId;
     public readonly rpath:string;
@@ -375,10 +372,6 @@ export class BundlerModule {
         return this.error(this.makeErrorPosition(node), code, message);
     }
 
-    makeImportModulePath(mpath:string):ParsedImportPath {
-        return makeImportModulePath(this.mpath, this.id.apath, mpath);
-    }
-
     private async _refine(sourceMtime:number, dtsMtime:number):Promise<RefinedModule|null> {
         if (sourceMtime === -1) {
             this.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${this.mpath}'`);
@@ -407,6 +400,7 @@ export class BundlerModule {
 
         const moduleAPath = this.id.apath;
         const moduleinfo = getScriptKind(moduleAPath);
+        const printer = ts.createPrinter();
         
         const refs:SourceFileData[] = [];
 
@@ -431,9 +425,10 @@ export class BundlerModule {
             return null;
         }
         const helper = new RefineHelper(this.bundler, this, refined, sourceFile);
-        
+
         const jsFactory = (ctx:ts.TransformationContext)=>{
-            const transformer = new JsTransformer(ctx, helper, false);
+            const tool = new MakeTool(ctx, helper, sourceFile, false);
+            const importer = new JsImporter(tool, tool.globalVar);
 
             const visit = (_node:ts.Node):ts.Node|ts.Node[]|undefined=>{
                 switch (_node.kind) {
@@ -460,7 +455,7 @@ export class BundlerModule {
                     case '__filename': useFileName = true; break;
                     case 'module':
                         useModule = true;
-                        if (right !== null && nameEquals(right, 'exports')) {
+                        if (right !== null && tshelper.nameEquals(right, 'exports')) {
                             useModuleExports = true;
                         }
                         break;
@@ -475,7 +470,7 @@ export class BundlerModule {
                     if (ref.kind === ts.SyntaxKind.ExternalModuleReference) {
                         const importPath = helper.parseImportPath(ref.expression);
                         if (importPath === null) return node;
-                        const res = transformer.importFromStringLiteral(importPath);
+                        const res = importer.importFromStringLiteral(importPath);
                         if (res === NOIMPORT) return undefined;
                         return ctx.factory.createVariableDeclaration(node.name, undefined, undefined, 
                             res !== null ? res.node : importPath.call(ctx.factory));
@@ -487,13 +482,12 @@ export class BundlerModule {
                     switch (node.expression.kind) {
                     case ts.SyntaxKind.ImportKeyword: {
                         if (node.arguments.length !== 1) {
-                            refined!.errored = true;
-                            this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Cannot call import with multiple parameters`);
+                            helper.error(IfTsbError.Unsupported, `Cannot call import with multiple parameters`);
                             return node;
                         }
                         const importPath = helper.parseImportPath(node.arguments[0]);
                         if (importPath === null) return node;
-                        const res = transformer.importFromStringLiteral(importPath);
+                        const res = importer.importFromStringLiteral(importPath);
                         if (res === NOIMPORT) return ctx.factory.createObjectLiteralExpression();
                         return res !== null ? res.node :importPath.call(ctx.factory);
                     }
@@ -502,7 +496,7 @@ export class BundlerModule {
                         if (identifier.escapedText === 'require') {
                             const importPath = helper.parseImportPath(node.arguments[0]);
                             if (importPath === null) return node;
-                            const res = transformer.importFromStringLiteral(importPath);
+                            const res = importer.importFromStringLiteral(importPath);
                             if (res === NOIMPORT) return ctx.factory.createObjectLiteralExpression();
                             return res !== null ? res.node : importPath.call(ctx.factory);
                         } else {
@@ -525,8 +519,8 @@ export class BundlerModule {
                             const funcname = params.shift();
                             if (path == null || !path.isStringLiteral()) break;
                             if (funcname == null || !funcname.isStringLiteral()) break;
-                            const mpath = that.makeImportModulePath(path.value);
-                            const importPath = transformer.getImportPath(mpath);
+                            const mpath = helper.makeImportModulePath(path.value);
+                            const importPath = tool.getImportPath(mpath);
                             if (importPath === null) break;
 
                             if (!moduleReloaderRegistered) {
@@ -539,12 +533,7 @@ export class BundlerModule {
                     }}
                     break;
                 }}
-                helper.stacks.push(_node);
-                try {
-                    return ts.visitEachChild(_node, visit, ctx);
-                } finally {
-                    helper.stacks.pop();
-                }
+                return helper.visitChildren(_node, visit, ctx);
             };
             
             return (srcfile:ts.SourceFile)=>{
@@ -553,286 +542,240 @@ export class BundlerModule {
             };
         };
 
-        const declFactory = (ctx:ts.TransformationContext)=>{
-            const transformer = new DeclTransformer(ctx, helper, true);
+        const declFactory = (sourceFile:ts.SourceFile)=>{
+            return (ctx:ts.TransformationContext)=>{
+                const tool = new MakeTool(ctx, helper, sourceFile, true);
+                const importer = new DeclImporter(tool, tool.globalVar);
+                const arrImporter = new StringArrayImporter(tool, [bundler.globalVarName]);
+    
+                const visitAbsoluting = (outerModulePath:ParsedImportPath|null)=>{
+                    const visitAbsoluting = (_node:ts.Node):ts.Node[]|ts.Node|undefined=>{
+                        switch (_node.kind) {
+                        case ts.SyntaxKind.Identifier: {
+                            if (_node.parent == null) break;
+                            const symbol = typeChecker.getSymbolAtLocation(_node);
+                            if (symbol == null) break;
+                            if (symbol.declarations == null) break;
+                            if (!tshelper.isRootIdentifier(_node as ts.Identifier)) break;
+                            if (symbol.declarations.indexOf(_node.parent as ts.Declaration) !== -1) break;
 
-            const visitWith = (_node:ts.Node, visitor:ts.Visitor):ts.Node[]|ts.Node|undefined=>{
-                switch (_node.kind) {
-                case ts.SyntaxKind.ModuleDeclaration: {
-                    let node = _node as ts.ModuleDeclaration;
-                    if (!hasModifier(node, ts.SyntaxKind.DeclareKeyword)) break;
-                    if ((node.flags & ts.NodeFlags.Namespace) !== 0) break;
-                    if ((node.flags & ts.NodeFlags.GlobalAugmentation) !== 0) {
-                        helper.stacks.push(_node);
-                        let visited:ts.Node;
-                        try {
-                            visited = ts.visitEachChild(node, makeVisitAbsoluting(null, null), ctx);
-                        } finally {
-                            helper.stacks.pop();
-                        }
-                        globalDeclaration += 'declare ';
-                        const printer = ts.createPrinter();
-                        globalDeclaration += printer.printNode(ts.EmitHint.Unspecified, visited, sourceFile);
-                        globalDeclaration += '\n';
-                    } else {
-                        const importPath = helper.parseImportPath(node.name);
-                        if (importPath === null) break;
-                        const res = transformer.importFromStringLiteral(importPath);
-                        if (res === NOIMPORT) break;
-                        if (res.module === null) break;
-                        
-                        const moduleAPath = helper.getAbsolutePath(importPath);
-                        let moduleSourceFile:ts.SourceFile|null = null;
-                        if (moduleAPath !== null) {
-                            moduleSourceFile = getSourceFile(moduleAPath);
-                        }
-                        helper.stacks.push(_node);
-                        try {
-                            const importAPath = moduleAPath !== null ? getScriptKind(moduleAPath).modulePath.replace(/\\/g, '/') : null;
-                            node = ts.visitEachChild(node, makeVisitAbsoluting(importAPath, importPath), ctx);
-                        } finally {
-                            helper.stacks.pop();
-                        }
-
-                        const nsnode = ctx.factory.createModuleDeclaration(undefined, 
-                            [ctx.factory.createModifier(ts.SyntaxKind.ExportKeyword)], 
-                            ctx.factory.createIdentifier(res!.moduleId!.varName),
-                            node.body, ts.NodeFlags.Namespace);
-                        const printer = ts.createPrinter();
-                        moduleDeclaration += printer.printNode(ts.EmitHint.Unspecified, nsnode, sourceFile);
-                        moduleDeclaration += '\n';
-                    }
-                    return undefined;
-                }
-                case ts.SyntaxKind.DeclareKeyword:
-                    return undefined;
-                case ts.SyntaxKind.ExportDeclaration: {
-                    const node = _node as ts.ExportDeclaration;
-                    const module = node.moduleSpecifier;
-                    if (module != null) {
-                        this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `if-tsb cannot export identifiers from the module`);
-                        return node;
-                    }
-                    break;
-                }
-                case ts.SyntaxKind.ExportAssignment: {
-                    const exportName = bundler.globalVarName+'_exported';
-                    const out:ts.Node[] = [];
-                    const node = _node as ts.ExportAssignment;
-                    let identifier:ts.Identifier|string;
-                    const exports:ts.ExportSpecifier[] = [];
-                    if (node.expression.kind === ts.SyntaxKind.Identifier) {
-                        identifier = node.expression as ts.Identifier;
-                        exports.push(ctx.factory.createExportSpecifier(false, identifier, exportName));
-                    } else {
-                        identifier = exportName;
-                        out.push(ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, identifier, node.expression as ts.ModuleReference));
-                        exports.push(ctx.factory.createExportSpecifier(false, undefined, identifier));
-                    }
-
-                    if (node.isExportEquals) {
-                        // export = item
-                        exportEquals = true;
-                    } else {
-                        // export defualt item
-                        exports.push(ctx.factory.createExportSpecifier(false, identifier, 'default'));
-                    }
-                    out.push(ctx.factory.createExportDeclaration(
-                        undefined,
-                        undefined,
-                        false,
-                        ctx.factory.createNamedExports(exports)
-                    ));
-                    return out;
-                }
-                case ts.SyntaxKind.ImportEqualsDeclaration: {
-                    const node = _node as ts.ImportEqualsDeclaration;
-                    
-                    const ref = node.moduleReference;
-                    if (ref.kind === ts.SyntaxKind.ExternalModuleReference) {
-                        const importPath = helper.parseImportPath(ref.expression);
-                        if (importPath === null) return node;
-                        const res = transformer.importFromStringLiteral(importPath);
-                        if (res === NOIMPORT) return undefined;
-                        return ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, node.name, res.node);
-                    }
-                    break;
-                }
-                case ts.SyntaxKind.ImportType: { // let v:import('module').Type;
-                    const node = _node as ts.ImportTypeNode;
-                    const importPath = helper.parseImportPath(node.argument);
-                    if (importPath === null) return node;
-                    const res = transformer.importFromStringLiteral(importPath);
-                    if (res === NOIMPORT) return node;
-                    if (res.moduleId === null) return node;
-                    return transformer.joinEntityNames(res.node, node.qualifier);
-                }
-                case ts.SyntaxKind.ImportDeclaration: { // import 'module'; import { a } from 'module'; import a from 'module';
-                    const node = _node as ts.ImportDeclaration;
-                    const importPath = helper.parseImportPath(node.moduleSpecifier);
-                    if (importPath === null) return node;
-                    const res = transformer.importFromStringLiteral(importPath);
-                    const clause = node.importClause;
-                    if (clause == null) {
-                        // import 'module';
-                        return undefined;
-                    }
-                    if (res === NOIMPORT) return undefined;
-                    if (clause.namedBindings != null) {
-                        const out:ts.Node[] = [];
-                        switch (clause.namedBindings.kind) {
-                        case ts.SyntaxKind.NamespaceImport: 
-                            // import * as a from 'module';
-                            if (clause.namedBindings == null) {
-                                this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Unexpected import syntax`);
-                                return node;
+                            for (const _decl of symbol.declarations) {
+                                switch (_decl.kind) {
+                                case ts.SyntaxKind.NamespaceImport: {
+                                    const decl = _decl as ts.NamespaceImport;
+                                    const importDecl = decl.parent.parent;
+                                    const importPath = helper.parseImportPath(importDecl.moduleSpecifier);
+                                    if (importPath === null) continue;
+                                    const res = importer.importFromStringLiteral(importPath);
+                                    if (res === NOIMPORT) continue;
+                                    return res.node;
+                                }
+                                case ts.SyntaxKind.ImportSpecifier: {
+                                    const decl = _decl as ts.ImportSpecifier;
+                                    const importDecl = decl.parent.parent.parent;
+                                    const importPath = helper.parseImportPath(importDecl.moduleSpecifier);
+                                    if (importPath === null) continue;
+                                    if (_node.parent.kind === ts.SyntaxKind.ExpressionWithTypeArguments) {
+                                        const res = arrImporter.importFromStringLiteral(importPath);
+                                        if (res === NOIMPORT) continue;
+                                        // transformer.
+                                        return tool.createIdentifierChain([...res.node, decl.propertyName || decl.name]);
+                                    } else {
+                                        const res = importer.importFromStringLiteral(importPath);
+                                        if (res === NOIMPORT) continue;
+                                        return ctx.factory.createQualifiedName(res.node, decl.propertyName || decl.name);
+                                    }
+                                }
+                                case ts.SyntaxKind.Parameter:
+                                case ts.SyntaxKind.TypeParameter:
+                                    return _node;
+                                default:{
+                                    const res = tool.analyizeDeclPath(_node, _decl, outerModulePath);
+                                    return visitWith(res, visitAbsoluting);
+                                }
+                                }
                             }
-                            return ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, clause.namedBindings.name, res.node);
-                        case ts.SyntaxKind.NamedImports:
-                            // import { a } from 'module';
-                            for (const element of clause.namedBindings.elements) {
-                                out.push(ctx.factory.createImportEqualsDeclaration(
-                                    undefined,
-                                    undefined,
-                                    false,
-                                    element.name,
-                                    ctx.factory.createQualifiedName(res.node, element.propertyName || element.name)));
-                            }
-                            break;
-                        }
-                        return out;
-                    } else if (clause.name != null) {
-                        // import a from 'module';
-                        return ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, clause.name, 
-                            ctx.factory.createQualifiedName(res.node, bundler.globalVarName+'_exported'));
-                    } else {
-                        this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Unexpected import syntax`);
-                        return node;
-                    }
-                }
-                case ts.SyntaxKind.CallExpression: {
-                    const node = _node as ts.CallExpression;
-                    switch (node.expression.kind) {
-                    case ts.SyntaxKind.ImportKeyword: { // const res = import('module');
-                        if (node.arguments.length !== 1) {
-                            refined!.errored = true;
-                            this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Cannot call import with multiple parameters`);
                             return _node;
                         }
-                        const importPath = helper.parseImportPath(node.arguments[0]);
-                        if (importPath === null) return node;
-                        const res = transformer.importFromStringLiteral(importPath);;
-                        if (res === NOIMPORT) return ctx.factory.createObjectLiteralExpression();
-                        return res.node;
-                    }}
-                    break;
-                }
-                }
-                helper.stacks.push(_node);
-                try {
-                    return ts.visitEachChild(_node, visitor, ctx);
-                } finally {
-                    helper.stacks.pop();
-                }
-            }
-
-            const makeVisitAbsoluting = (importAPath:string|null, importPath:ParsedImportPath|null)=>{
-                const visitAbsoluting = (_node:ts.Node):ts.Node[]|ts.Node|undefined=>{
-                    switch (_node.kind) {
-                    case ts.SyntaxKind.Identifier: {
-                        if (_node.parent == null) break;
-                        const symbol = typeChecker.getSymbolAtLocation(_node);
-                        if (symbol == null) break;
-                        if (symbol.declarations == null) break;
-                        if (!isRootIdentifier(_node as ts.Identifier)) break;
-                        for (const _decl of symbol.declarations) {
-                            switch (_decl.kind) {
-                            case ts.SyntaxKind.NamespaceImport: {
-                                const decl = _decl as ts.NamespaceImport;
-                                const importDecl = decl.parent.parent;
-                                const importPath = helper.parseImportPath(importDecl.moduleSpecifier);
-                                if (importPath === null) continue;
-                                const res = transformer.importFromStringLiteral(importPath);
-                                if (res === NOIMPORT) continue;
-                                return res.node;
-                            }
-                            case ts.SyntaxKind.ImportSpecifier: {
-                                const decl = _decl as ts.ImportSpecifier;
-                                const importDecl = decl.parent.parent.parent;
-                                const importPath = helper.parseImportPath(importDecl.moduleSpecifier);
-                                if (importPath === null) continue;
-                                const res = transformer.importFromStringLiteral(importPath);
-                                if (res === NOIMPORT) continue;
-                                if (decl.propertyName == null) continue;
-                                return ctx.factory.createQualifiedName(res.node, decl.propertyName);
-                            }
-                            case ts.SyntaxKind.Parameter:
-                            case ts.SyntaxKind.TypeParameter:
-                                return _node;
-                            default:{
-                                if (_node.parent === _decl) break;
-                                const fullPath = typeChecker.getFullyQualifiedName(symbol);
-                                if (fullPath.startsWith('global.')) return _node;
-                                if (!fullPath.startsWith('"')) {
-                                    if (_decl.kind === ts.SyntaxKind.TypeAliasDeclaration) {
-                                        const alias = _decl as ts.TypeAliasDeclaration;
-                                        if (alias.typeParameters == null) {
-                                            return visitAbsoluting(alias.type);
-                                        }
-                                    }
-                                    if ((symbol as any).parent === undefined) return _node; // global expected
-                                    this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Need to export`);
-                                    return _node;
-                                }
-                                const endIndex = fullPath.indexOf('"', 1);
-                                if (endIndex === -1) {
-                                    this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Unexpected name ${fullPath}`);
-                                    return _node;
-                                }
-                                const filePath = fullPath.substring(1, endIndex);
-                                if (moduleAPath !== null && filePath === importAPath) {
-                                    return _node;
-                                }
-                                if (importPath !== null && filePath === importPath.importName) {
-                                    return _node;
-                                }
-                                const symbolPath = fullPath.substr(endIndex+1).split('.');
-                                if (symbolPath[0] !== '') {
-                                    this.error(helper.getErrorPosition(), IfTsbError.Unsupported, `Unexpected name ${fullPath}`);
-                                    return _node;
-                                }
-                                symbolPath[0] = this.id.varName;
-                                return transformer.createQualifiedChain(transformer.globalVar, symbolPath);
-                            }
-                            }
                         }
-                        return _node;
-                    }
-                    }
-                    return visitWith(_node, visitAbsoluting);
+                        return visitWith(_node, visitAbsoluting);
+                    };
+                    return visitAbsoluting;
                 };
-                return visitAbsoluting;
-            };
-
-            const visit = (_node:ts.Node):ts.Node[]|ts.Node|undefined=>{
-                return visitWith(_node, visit);
-            };
-
-            return (srcfile:ts.SourceFile)=>{
-                if (srcfile.fileName !== sourceFile.fileName && srcfile.fileName !== dtsFilePath) return srcfile;
-
-                return ts.visitEachChild(srcfile, visit, ctx);
+    
+                const visitWith = (_node:ts.Node, visitor:ts.Visitor):ts.Node[]|ts.Node|undefined=>{
+                    switch (_node.kind) {
+                    case ts.SyntaxKind.ModuleDeclaration: {
+                        let node = _node as ts.ModuleDeclaration;
+                        const res = importer.importFromModuleDecl(node);
+                        if (res === null) break;
+                        if (res === GLOBAL) {
+                            // global module
+                            const visited = ts.visitEachChild(node, visitAbsoluting(null), ctx);
+                            globalDeclaration += 'declare global ';
+                            globalDeclaration += printer.printNode(ts.EmitHint.Unspecified, visited.body!, sourceFile);
+                            globalDeclaration += '\n';
+                        } else if (res.module === null) {
+                            // external module
+                            const visited = ts.visitEachChild(node, visitAbsoluting(res.importPath), ctx);
+                            globalDeclaration += 'declare module "';
+                            globalDeclaration += res.importPath.mpath;
+                            globalDeclaration += '"';
+                            globalDeclaration += printer.printNode(ts.EmitHint.Unspecified, visited.body!, sourceFile);
+                            globalDeclaration += '\n';
+                        } else {
+                            const visited = ts.visitEachChild(node, visitAbsoluting(res.importPath), ctx);
+                            moduleDeclaration += 'export namespace ';
+                            moduleDeclaration += res.moduleId.varName;
+                            moduleDeclaration += printer.printNode(ts.EmitHint.Unspecified, visited.body!, sourceFile);
+                            moduleDeclaration += '\n';
+                        }
+                        return undefined;
+                    }
+                    case ts.SyntaxKind.DeclareKeyword:
+                        return undefined;
+                    case ts.SyntaxKind.ExportDeclaration: {
+                        const node = _node as ts.ExportDeclaration;
+                        const module = node.moduleSpecifier;
+                        if (module != null) {
+                            helper.error(IfTsbError.Unsupported, `if-tsb cannot export identifiers from the module`);
+                            return node;
+                        }
+                        break;
+                    }
+                    case ts.SyntaxKind.ExportAssignment: {
+                        const exportName = bundler.globalVarName+'_exported';
+                        const out:ts.Node[] = [];
+                        const node = _node as ts.ExportAssignment;
+                        let identifier:ts.Identifier|string;
+                        const exports:ts.ExportSpecifier[] = [];
+                        if (node.expression.kind === ts.SyntaxKind.Identifier) {
+                            identifier = node.expression as ts.Identifier;
+                            exports.push(ctx.factory.createExportSpecifier(false, identifier, exportName));
+                        } else {
+                            identifier = exportName;
+                            out.push(ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, identifier, node.expression as ts.ModuleReference));
+                            exports.push(ctx.factory.createExportSpecifier(false, undefined, identifier));
+                        }
+    
+                        if (node.isExportEquals) {
+                            // export = item
+                            exportEquals = true;
+                        } else {
+                            // export defualt item
+                            exports.push(ctx.factory.createExportSpecifier(false, identifier, 'default'));
+                        }
+                        out.push(ctx.factory.createExportDeclaration(
+                            undefined,
+                            undefined,
+                            false,
+                            ctx.factory.createNamedExports(exports)
+                        ));
+                        return out;
+                    }
+                    case ts.SyntaxKind.ImportEqualsDeclaration: {
+                        const node = _node as ts.ImportEqualsDeclaration;
+                        
+                        const ref = node.moduleReference;
+                        if (ref.kind === ts.SyntaxKind.ExternalModuleReference) {
+                            const importPath = helper.parseImportPath(ref.expression);
+                            if (importPath === null) return node;
+                            const res = importer.importFromStringLiteral(importPath);
+                            if (res === NOIMPORT) return undefined;
+                            return ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, node.name, res.node);
+                        }
+                        break;
+                    }
+                    case ts.SyntaxKind.ImportType: { // let v:import('module').Type;
+                        const node = _node as ts.ImportTypeNode;
+                        const importPath = helper.parseImportPath(node.argument);
+                        if (importPath === null) return node;
+                        const res = importer.importFromStringLiteral(importPath);
+                        if (res === NOIMPORT) return node;
+                        if (res.moduleId === null) return node;
+                        return tool.joinEntityNames(res.node, node.qualifier);
+                    }
+                    case ts.SyntaxKind.ImportDeclaration: { // import 'module'; import { a } from 'module'; import a from 'module';
+                        const node = _node as ts.ImportDeclaration;
+                        const importPath = helper.parseImportPath(node.moduleSpecifier);
+                        if (importPath === null) return node;
+                        const res = importer.importFromStringLiteral(importPath);
+                        const clause = node.importClause;
+                        if (clause == null) {
+                            // import 'module';
+                            return undefined;
+                        }
+                        if (res === NOIMPORT) return undefined;
+                        if (clause.namedBindings != null) {
+                            const out:ts.Node[] = [];
+                            switch (clause.namedBindings.kind) {
+                            case ts.SyntaxKind.NamespaceImport: 
+                                // import * as a from 'module';
+                                if (clause.namedBindings == null) {
+                                    helper.error(IfTsbError.Unsupported, `Unexpected import syntax`);
+                                    return node;
+                                }
+                                return ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, clause.namedBindings.name, res.node);
+                            case ts.SyntaxKind.NamedImports:
+                                // import { a } from 'module';
+                                for (const element of clause.namedBindings.elements) {
+                                    out.push(ctx.factory.createImportEqualsDeclaration(
+                                        undefined,
+                                        undefined,
+                                        false,
+                                        element.name,
+                                        ctx.factory.createQualifiedName(res.node, element.propertyName || element.name)));
+                                }
+                                break;
+                            }
+                            return out;
+                        } else if (clause.name != null) {
+                            // import a from 'module';
+                            return ctx.factory.createImportEqualsDeclaration(undefined, undefined, false, clause.name, 
+                                ctx.factory.createQualifiedName(res.node, bundler.globalVarName+'_exported'));
+                        } else {
+                            helper.error(IfTsbError.Unsupported, `Unexpected import syntax`);
+                            return node;
+                        }
+                    }
+                    case ts.SyntaxKind.CallExpression: {
+                        const node = _node as ts.CallExpression;
+                        switch (node.expression.kind) {
+                        case ts.SyntaxKind.ImportKeyword: { // const res = import('module');
+                            if (node.arguments.length !== 1) {
+                                helper.error(IfTsbError.Unsupported, `Cannot call import with multiple parameters`);
+                                return _node;
+                            }
+                            const importPath = helper.parseImportPath(node.arguments[0]);
+                            if (importPath === null) return node;
+                            const res = importer.importFromStringLiteral(importPath);;
+                            if (res === NOIMPORT) return ctx.factory.createObjectLiteralExpression();
+                            return res.node;
+                        }}
+                        break;
+                    }
+                    }
+                    return helper.visitChildren(_node, visitor, ctx);
+                }
+    
+                const visit = (_node:ts.Node):ts.Node[]|ts.Node|undefined=>{
+                    return visitWith(_node, visit);
+                };
+                
+                return (srcfile:ts.SourceFile)=>{
+                    if (srcfile.fileName !== sourceFile.fileName) return srcfile;
+                    return ts.visitEachChild(srcfile, visit, ctx);
+                };
             };
         };
 
         const transformer = { 
             after: [jsFactory],
-            afterDeclarations: [declFactory],
+            afterDeclarations: [declFactory(sourceFile)],
         };
 
         let sourceMapText:string|null = null;
         let declaration:string|null = null as any;
-        let dtsFilePath:string|null = null;
         let stricted = false;
         const allowedSources = new Set<string>();
         allowedSources.add(moduleAPath);
@@ -930,13 +873,14 @@ export class BundlerModule {
             if (!bundler.faster) {
                 for (const st of sourceFile.statements) {
                     if (st.kind === ts.SyntaxKind.ModuleDeclaration) {
-                        if (!hasModifier(st, ts.SyntaxKind.DeclareKeyword)) continue;
+                        if (!tshelper.hasModifier(st, ts.SyntaxKind.DeclareKeyword)) continue;
                         if ((st.flags & ts.NodeFlags.Namespace) !== 0) continue;
                         if ((st.flags & ts.NodeFlags.GlobalAugmentation) !== 0) continue;
                         const moduleDecl = st as ts.ModuleDeclaration;
                         const importPath = helper.parseImportPath(moduleDecl.name);
                         if (importPath === null) continue;
-                        const apath = helper.getAbsolutePath(importPath);
+                        if (importPath.isBuiltInModule()) continue;
+                        const apath = importPath.getAbsolutePath();
                         if (apath === null) continue;
                         allowedSources.add(apath);
                     }
@@ -970,8 +914,7 @@ export class BundlerModule {
                 const dtsPath = moduleinfo.modulePath + '.d.ts';
                 try {
                     const dtsSourceFile = getSourceFile(dtsPath);
-                    dtsFilePath = dtsSourceFile.fileName;
-                    const res = ts.transform(dtsSourceFile, transformer.afterDeclarations, bundler.tsoptions);
+                    const res = ts.transform(dtsSourceFile, [declFactory(dtsSourceFile)], bundler.tsoptions);
                     const printer = ts.createPrinter();
                     declaration = printer.printFile(res.transformed[0]);
                 } catch (err) {
@@ -1133,7 +1076,6 @@ export class BundlerModule {
             if (globalDeclaration !== '') {
                 refined.globalDeclaration = globalDeclaration;
             }
-
             // sourcemap
             refined.sourceMapText = sourceMapText;
         }
@@ -1218,6 +1160,10 @@ class RefineHelper {
         }
         return null;
     }
+    error(code:number, message:string):void {
+        this.refined!.errored = true;
+        return this.module.error(this.getErrorPosition(), code, message);
+    }
     addExternalList(name:string, mode:ExternalMode, codepos:ErrorPosition|null, declaration:boolean):BundlerModuleId {
         const childModule = this.bundler.getModuleId(name, mode);
         this.refined.imports.push(new ImportInfo((-mode)+'', name, codepos, declaration));
@@ -1228,32 +1174,45 @@ class RefineHelper {
         this.refined.imports.push(new ImportInfo(childModule.id.apath, mpath, codepos, declaration));
         return childModule;
     }
+    makeImportModulePath(mpath:string):ParsedImportPath {
+        const module = this.module;
+        const baseMPath = module.mpath;
+        const baseAPath = module.id.apath;
+        const importPath = mpath;
+
+        let out:string;
+        const parsedAPath = path.parse(baseAPath);
+        if (!baseMPath.endsWith('/index') && parsedAPath.name === 'index') {
+            out = joinModulePath(baseMPath, importPath);
+        } else {
+            const dirmodule = dirnameModulePath(baseMPath);
+            out = joinModulePath(dirmodule, importPath);
+        }
+        return new ParsedImportPath(this, importPath, out);
+    }
     parseImportPath(stringLiteralNode:ts.Node):ParsedImportPath|null {
         if (stringLiteralNode.kind === ts.SyntaxKind.LiteralType) {
             stringLiteralNode = (stringLiteralNode as ts.LiteralTypeNode).literal;
         }
         if (stringLiteralNode.kind !== ts.SyntaxKind.StringLiteral) {
             if (!this.bundler.suppressDynamicImportErrors) {
-                this.refined.errored = true;
-                this.module.error(this.getErrorPosition(), IfTsbError.Unsupported, `if-tsb does not support dynamic import for local module, (${ts.SyntaxKind[stringLiteralNode.kind]} is not string literal)`);
+                this.error(IfTsbError.Unsupported, `if-tsb does not support dynamic import for local module, (${ts.SyntaxKind[stringLiteralNode.kind]} is not string literal)`);
             }
             return null;
         }
         const node = stringLiteralNode as ts.StringLiteral;
-        return this.module.makeImportModulePath(node.text);
+        return this.makeImportModulePath(node.text);
     }
-    getAbsolutePath(importPath:ParsedImportPath):string|null {
-        let module = ts.nodeModuleNameResolver(importPath.importName, this.module.id.apath, this.bundler.tsoptions, this.bundler.sys, this.bundler.moduleResolutionCache);
-        if (!module.resolvedModule && importPath.importName === '.') 
-            module = ts.nodeModuleNameResolver('./index', this.module.id.apath, this.bundler.tsoptions, this.bundler.sys, this.bundler.moduleResolutionCache);
-        const info = module.resolvedModule;
-        if (info == null) {
-            this.refined.errored = true;
-            this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
-            return null;
+    visitChildren<T extends ts.Node>(node:T, visitor:ts.Visitor, ctx:ts.TransformationContext):T {
+        this.stacks.push(node);
+        try {
+            return ts.visitEachChild(node, visitor, ctx);
+        } finally {
+            this.stacks.pop();
         }
-
-        return path.isAbsolute(info.resolvedFileName) ? path.join(info.resolvedFileName) : path.join(this.bundler.basedir, info.resolvedFileName);
+    }
+    importError(importName:string):void {
+        this.error(IfTsbError.ModuleNotFound, `Cannot find module '${importName}' or its corresponding type declarations.`);
     }
 
 }
@@ -1262,46 +1221,34 @@ const PREIMPORT = '#pre';
 type PREIMPORT = '#pre';
 const NOIMPORT = '#noimp';
 type NOIMPORT = '#noimp';
+const GLOBAL = '#global';
+type GLOBAL = '#global';
 
 interface ImportResult<T> {
     node:T;
     module:BundlerModule|null;
-    moduleId:BundlerModuleId|null;
+    moduleId:BundlerModuleId;
+    importPath:ParsedImportPath;
 }
 
-abstract class Transformer<T> {
+class MakeTool {
     public readonly refined:RefinedModule;
     public readonly bundler:Bundler;
     public readonly module:BundlerModule;
     public readonly factory:ts.NodeFactory;
-    public readonly globalVar:T;
+    public readonly globalVar:ts.Identifier;
 
     constructor(
         public readonly ctx:ts.TransformationContext,
-        public readonly importer:RefineHelper,
+        public readonly helper:RefineHelper,
+        public readonly sourceFile:ts.SourceFile,
         public readonly delcaration:boolean,
         ) {
-        this.bundler = importer.bundler;
-        this.module = importer.module;
-        this.refined = importer.refined;
+        this.bundler = helper.bundler;
+        this.module = helper.module;
+        this.refined = helper.refined;
         this.factory = ctx.factory;
-        this.globalVar = this.makeIdentifier(this.bundler.globalVarName);
-    }
-
-    abstract makeIdentifier(name:string):T;
-    abstract makePropertyAccess(left:T, right:string):T;
-    abstract importLocal(childModule:BundlerModule):T;
-
-    preimport(mpath:string):ImportResult<T>{
-        const module = this.importer.addExternalList(mpath, ExternalMode.Preimport, this.importer.getErrorPosition(), this.delcaration);
-        let node:T;
-        if (this.delcaration) node = this.makeIdentifier(`${this.bundler.globalVarName}_${module.varName}`);
-        else node = this.makePropertyAccess(this.globalVar, module.varName);
-        return {
-            node,
-            module: null,
-            moduleId: module,
-        };
+        this.globalVar = this.factory.createIdentifier(this.bundler.globalVarName);
     }
 
     getImportPath(importPath:ParsedImportPath):string|null {
@@ -1321,8 +1268,7 @@ abstract class Transformer<T> {
             if (!importPath.importName.startsWith('.')) {
                 return importPath.mpath;
             }
-            this.refined.errored = true;
-            this.module.error(this.importer.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+            this.helper.importError(importPath.importName);
             return null;
         }
 
@@ -1331,8 +1277,7 @@ abstract class Transformer<T> {
         if (kind.kind === ts.ScriptKind.External) {
             childmoduleApath = kind.modulePath+'.js';
             if (!cachedStat.existsSync(childmoduleApath)) {
-                this.refined.errored = true;
-                this.module.error(this.importer.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+                this.helper.importError(importPath.importName);
                 return null;
             }
         }
@@ -1360,13 +1305,12 @@ abstract class Transformer<T> {
         const info = module.resolvedModule;
         if (info == null) {
             if (!importPath.importName.startsWith('.')) {
-                if (builtin.has(importPath.mpath)) {
+                if (importPath.isBuiltInModule()) {
                     return PREIMPORT;
                 }
                 if (!this.bundler.bundleExternals) return null;
             }
-            this.refined.errored = true;
-            this.module.error(this.importer.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+            this.helper.importError(importPath.importName);
             return null;
         }
 
@@ -1382,32 +1326,25 @@ abstract class Transformer<T> {
         if (kind.kind === ts.ScriptKind.External) {
             childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
             if (!cachedStat.existsSync(childmoduleApath)) {
-                this.refined.errored = true;
-                this.module.error(this.importer.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+                this.helper.importError(importPath.importName);
                 return null;
             }
         }
         return childmoduleApath;
     }
     
-    importFromStringLiteral(importPath:ParsedImportPath):ImportResult<T>|NOIMPORT|null{
-        if (importPath.mpath === 'if-tsb/reflect') {
-            return NOIMPORT;
+    createIdentifierChain(names:(string|ts.MemberName|ts.Expression)[]):ts.Expression {
+        if (names.length === 0) throw Error('empty array');
+        const first = names[0];
+        let node:ts.Expression = typeof first === 'string' ? this.factory.createIdentifier(first) : first;
+        for (let i=1;i<names.length;i++) {
+            const name = names[i];
+            if (typeof name !== 'string' && !ts.isMemberName(name)) throw Error(`Unexpected kind ${name.kind}`);
+            node = this.factory.createPropertyAccessExpression(node, name);
         }
-        const resolved = this.resolveImport(importPath);
-        if (resolved === null) return null;
-        if (resolved === PREIMPORT) {
-            return this.preimport(importPath.mpath);
-        } else {
-            const childModule = this.importer.addToImportList(importPath.mpath, resolved, this.importer.getErrorPosition(), this.delcaration);
-            return {
-                node: this.importLocal(childModule),
-                module: childModule,
-                moduleId: childModule.id,
-            };
-        }
+        return node;
     }
-    
+
     createQualifiedChain(base:ts.EntityName, names:string[]):ts.EntityName {
         let chain:ts.EntityName = base;
         for (const name of names) {
@@ -1415,39 +1352,108 @@ abstract class Transformer<T> {
         }
         return chain;
     }
-}
+        
+    analyizeDeclPath(oriNode:ts.Node, declNode:ts.Declaration, outerModulePath:ParsedImportPath|null):ts.Node {
+        let outerModuleAPath:string|null;
+        if (outerModulePath !== null) {
+            if (!outerModulePath.isExternalModule()) {
+                outerModuleAPath = outerModulePath.getAbsolutePath();
+                if (outerModuleAPath !== null) {
+                    outerModuleAPath = outerModuleAPath.replace(/\\/g, '/');
+                }
+            }
+        }
+        class ReturnDirect {
+            constructor(public readonly node:ts.Node) {}
+        }
+        const moduleAPath = this.module.id.apath.replace(/\\/g, '/');
+        const getNodeName = (node:ts.Node)=>{
+            if (ts.isClassDeclaration(node)) {
+                if (node.name == null) {
+                    // export default
+                    return 'default';
+                } else {
+                    return node.name.text;
+                }
+            } else if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
+                return node.name.text;
+            } else {
+                return null;
+            }
+        };
+        const get = (node:ts.Node):ts.EntityName|ReturnDirect|null=> {
+            let name:string|null;
+            if (ts.isModuleDeclaration(node)) {
+                const imported = new DeclImporter(this, this.globalVar).importFromModuleDecl(node);
+                if (imported === null) {
+                    this.helper.error(IfTsbError.Unsupported, `Unresolved module ${node.name}`);
+                    return new ReturnDirect(oriNode);
+                } else if (imported === GLOBAL) {
+                    return new ReturnDirect(oriNode);
+                } else if (outerModulePath !== null && imported.importPath.mpath === outerModulePath.mpath) {
+                    // using itself
+                    return new ReturnDirect(oriNode);
+                } else {
+                    return imported.node;
+                }
+            } else if (ts.isSourceFile(node)) {
+                if (node.fileName === outerModuleAPath) {
+                    // using itself
+                    return new ReturnDirect(oriNode);
+                }
+                if (node.fileName === moduleAPath) {
+                    return this.factory.createQualifiedName(this.globalVar, this.module.id.varName);
+                }
+                if (!tshelper.isExportingModule(node)) { // global expected
+                    return new ReturnDirect(oriNode);
+                } else {
+                    debugger;
+                    this.helper.error(IfTsbError.Unsupported, `Unexpected source file ${node.fileName}`);
+                    return new ReturnDirect(oriNode);
+                }
+            } else if (ts.isModuleBlock(node)) {
+                return get(node.parent);
+            } else {
+                name = getNodeName(node);
+            }
+            if (name !== null) {
+                const res = get(node.parent);
+                if (res instanceof ReturnDirect) {
+                    return res;
+                }
+                if (!tshelper.isExportingOnDecl(node)) {
+                    if (ts.isTypeAliasDeclaration(node)) {
+                        if (node.getSourceFile().fileName === this.sourceFile.fileName) {
+                            return new ReturnDirect(node.type);
+                        }
+                        const type = node.type;
+                        if (ts.isIdentifier(type)) return new ReturnDirect(type);
+                    }
+                    this.helper.error(IfTsbError.Unsupported, `Need to export`);
+                    return new ReturnDirect(oriNode);
+                }
+                if (res === null ){
+                    return this.factory.createIdentifier(name);
+                } else {
+                    return this.factory.createQualifiedName(res, name);
+                }
+            } else {
+                debugger;
+                this.helper.error(IfTsbError.Unsupported, `Unexpected node kind ${ts.SyntaxKind[node.kind]}`);
+                return new ReturnDirect(oriNode);
+            }
+        };
+        const res = get(declNode);
+        if (res === null) {
+            debugger;
+            throw Error('Invalid');
+        } else if (res instanceof ReturnDirect) {
+            return res.node;
+        } else {
+            return res;
+        }
+    }
 
-class JsTransformer extends Transformer<ts.Expression> {
-    makeIdentifier(name:string):ts.Expression {
-        return this.factory.createIdentifier(name);
-    }
-    makePropertyAccess(left:ts.Expression, right:string):ts.Expression{
-        return this.factory.createPropertyAccessExpression(
-            left,
-            right);
-    }
-    importLocal(childModule:BundlerModule):ts.Expression{
-        const moduleVar = this.makePropertyAccess(this.globalVar, childModule.id.varName);
-        if (childModule.isEntry) return moduleVar;
-        return this.factory.createCallExpression(moduleVar, [], []);
-    }
-}
-
-class DeclTransformer extends Transformer<ts.EntityName> {
-    makeIdentifier(name:string):ts.EntityName {
-        return this.factory.createIdentifier(name);
-    }
-    makePropertyAccess(left:ts.EntityName, right:string):ts.EntityName{
-        return this.factory.createQualifiedName(left, right);
-    }
-    importLocal(childModule:BundlerModule):ts.EntityName{
-        return this.makePropertyAccess(this.globalVar, childModule.id.varName);
-    }
-    importFromStringLiteral(importPath:ParsedImportPath):ImportResult<ts.EntityName>|NOIMPORT {
-        const importName = super.importFromStringLiteral(importPath);
-        if (importName === null) return this.preimport(importPath.mpath);
-        return importName;
-    }
     joinEntityNames(...names:(ts.EntityName|undefined)[]):ts.EntityName {
         let res:ts.EntityName|undefined;
         const append = (node:ts.EntityName|undefined):void=>{
@@ -1466,5 +1472,124 @@ class DeclTransformer extends Transformer<ts.EntityName> {
         }
         if (res === undefined) throw TypeError('Invalid argument');
         return res;
+    }
+}
+
+abstract class Importer<T> {
+    public readonly bundler:Bundler;
+    public readonly factory:ts.NodeFactory;
+    public readonly helper:RefineHelper;
+    public readonly delcaration:boolean;
+
+    constructor(
+        public readonly tool:MakeTool,
+        public readonly globalVar:T,
+    ) {
+        this.bundler = tool.bundler;
+        this.factory = tool.factory;
+        this.helper = tool.helper;
+        this.delcaration = tool.delcaration;
+    }
+
+    abstract makeIdentifier(name:string):T;
+    abstract makePropertyAccess(left:T, right:string):T;
+    abstract importLocal(childModule:BundlerModule):T;
+
+    preimport(importPath:ParsedImportPath):ImportResult<T>{
+        if (importPath.importName.startsWith('.')) throw Error(`Invalid preimport ${importPath.importName}`);
+        const module = this.helper.addExternalList(importPath.mpath, ExternalMode.Preimport, this.helper.getErrorPosition(), this.delcaration);
+        let node:T;
+        if (this.delcaration) node = this.makeIdentifier(`${this.bundler.globalVarName}_${module.varName}`);
+        else node = this.makePropertyAccess(this.globalVar, module.varName);
+        return {
+            node,
+            module: null,
+            moduleId: module,
+            importPath,
+        };
+    }
+
+    importFromStringLiteral(importPath:ParsedImportPath):ImportResult<T>|NOIMPORT|null{
+        if (importPath.mpath === 'if-tsb/reflect') {
+            return NOIMPORT;
+        }
+        const resolved = this.tool.resolveImport(importPath);
+        if (resolved === null) return null;
+        if (resolved === PREIMPORT) {
+            return this.preimport(importPath);
+        } else {
+            const childModule = this.helper.addToImportList(importPath.mpath, resolved, this.helper.getErrorPosition(), this.delcaration);
+            return {
+                node: this.importLocal(childModule),
+                module: childModule,
+                moduleId: childModule.id,
+                importPath,
+            };
+        }
+    }
+    
+    importFromModuleDecl(node:ts.ModuleDeclaration):ImportResult<T>|GLOBAL|null {
+        if (!tshelper.hasModifier(node, ts.SyntaxKind.DeclareKeyword)) return null;
+        if ((node.flags & ts.NodeFlags.Namespace) !== 0) return null;
+        if ((node.flags & ts.NodeFlags.GlobalAugmentation) !== 0) {
+            return GLOBAL;
+        } else {
+            const importPath = this.helper.parseImportPath(node.name);
+            if (importPath === null) return null;
+            const res = this.importFromStringLiteral(importPath);
+            if (res === NOIMPORT) return null;
+            if (res === null) return null;
+            return res;
+        }
+    }
+}
+
+class JsImporter extends Importer<ts.Expression> {
+    makeIdentifier(name:string):ts.Expression {
+        return this.factory.createIdentifier(name);
+    }
+    makePropertyAccess(left:ts.Expression, right:string):ts.Expression{
+        return this.factory.createPropertyAccessExpression(
+            left,
+            right);
+    }
+    importLocal(childModule:BundlerModule):ts.Expression{
+        const moduleVar = this.makePropertyAccess(this.globalVar, childModule.id.varName);
+        if (childModule.isEntry) return moduleVar;
+        return this.factory.createCallExpression(moduleVar, [], []);
+    }
+}
+
+class DeclImporter extends Importer<ts.EntityName> {
+    makeIdentifier(name:string):ts.EntityName {
+        return this.factory.createIdentifier(name);
+    }
+    makePropertyAccess(left:ts.EntityName, right:string):ts.EntityName{
+        return this.factory.createQualifiedName(left, right);
+    }
+    importLocal(childModule:BundlerModule):ts.EntityName{
+        return this.makePropertyAccess(this.globalVar, childModule.id.varName);
+    }
+    importFromStringLiteral(importPath:ParsedImportPath):ImportResult<ts.EntityName>|NOIMPORT {
+        const importName = super.importFromStringLiteral(importPath);
+        if (importName === null) return this.preimport(importPath);
+        return importName;
+    }
+}
+
+class StringArrayImporter extends Importer<string[]> {
+    makeIdentifier(name:string):string[] {
+        return [name];
+    }
+    makePropertyAccess(left:string[], right:string):string[]{
+        return [...left, right];
+    }
+    importLocal(childModule:BundlerModule):string[]{
+        return this.makePropertyAccess(this.globalVar, childModule.id.varName);
+    }
+    importFromStringLiteral(importPath:ParsedImportPath):ImportResult<string[]>|NOIMPORT {
+        const importName = super.importFromStringLiteral(importPath);
+        if (importName === null) return this.preimport(importPath);
+        return importName;
     }
 }

@@ -1,21 +1,26 @@
-import { Test3 as Test4 } from "./types";
+import { Test3 as Test4, Test5 } from "./types";
 import * as fs2 from 'fs';
 import {Dir as Dir2} from 'fs';
+import { IGlob } from 'glob';
 
 export class Test {
 }
+
 declare global {
     interface GlobalCls {
     }
 }
 
 type GlobalClsRef = GlobalCls;
+type IGlob2 = IGlob;
 
 declare module "." {
+    let unionTypes:UnionString;
     let types:TypesType;
     let fromDeclaredModule:Test2;
     let fromCurrentModule:Test;
     let import_fs_dir:import('fs').Dir;
+    let import_glob_iglob:import('glob').IGlob;
     let dir2:Dir2;
     let fs_dir:fs2.Dir;
     let imported:Test4;
@@ -29,10 +34,26 @@ declare module "." {
         t:IterableIterator<number>;
     }
 
+    class Test3 extends Test5 {
+    }
+
     interface DeclaredType {
     }
 
     let test:DeclaredType;
+}
+
+declare module "fs" {
+    interface Dir {
+        test2?:Dirent;
+        test?:Test;
+    }
+}
+declare module "glob" {
+    interface IGlobBase {
+        test?:Test;
+        test2?:IGlob2;
+    }
 }
 
 export let a = new Test;
