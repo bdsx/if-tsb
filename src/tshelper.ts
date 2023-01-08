@@ -34,6 +34,9 @@ export namespace tshelper {
         'zlib',
     ]);
     export function isExporting(node:ts.Node):boolean {
+        if (ts.isVariableDeclaration(node)) {
+            return isExporting(node.parent.parent);
+        }
         if (node.parent.kind === ts.SyntaxKind.ExportSpecifier) return true;
         if (node.modifiers != null) {
             for (const mod of node.modifiers) {
@@ -80,10 +83,31 @@ export namespace tshelper {
         isExportingModuleMap.set(sourceFile, false);
         return false;
     }
-    export function isExportingOnDecl(node:ts.Node):boolean {
-        if (ts.isTypeAliasDeclaration(node)) {
-            return isExporting(node);
-        }
-        return true;
+    export function isModuleDeclaration(node:ts.Node):node is ts.ModuleDeclaration {
+        if (!ts.isModuleDeclaration(node)) return false;
+        return (node.flags & ts.NodeFlags.Namespace) === 0;
     }
+    export function isNamespace(node:ts.Node):node is ts.ModuleDeclaration {
+        if (!ts.isModuleDeclaration(node)) return false;
+        return (node.flags & ts.NodeFlags.Namespace) !== 0;
+    }
+    export function getNodeName(node:ts.Node):string|null{
+        if (ts.isClassDeclaration(node)) {
+            if (node.name == null) {
+                // export default
+                return 'default';
+            } else {
+                return node.name.text;
+            }
+        } else if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || tshelper.isNamespace(node) || ts.isEnumDeclaration(node)) {
+            return node.name.text;
+        } else if (ts.isVariableDeclaration(node)) {
+            if (ts.isIdentifier(node.name)) {
+                return node.name.text;
+            }
+            throw Error(`Unexpected name kind ${ts.SyntaxKind[node.name.kind]}`);
+        } else {
+            return null;
+        }
+    };
 }

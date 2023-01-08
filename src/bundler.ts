@@ -415,12 +415,7 @@ export class Bundler {
 
         this.writingCounter.increase();
         await this.taskQueue.run(module.id.varName, async()=>{
-            const startTime = Date.now();
-            const tooLongTimer = setInterval(()=>{
-                this.main.reportMessage(IfTsbError.TooSlow, `${Date.now()-startTime}ms for compiling ${module.id.apath}`, true);
-            }, 5000);
             const refined = await module.refine();
-            clearInterval(tooLongTimer);
             (async()=>{
                 if (refined === null) {
                     module.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${module.mpath}'`);

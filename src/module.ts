@@ -1106,7 +1106,15 @@ export class BundlerModule {
             (this.needDeclaration && refined.declaration === null) || !refined.checkRelativePath(this.rpath) ||
             (await this._checkExternalChanges(refined))) {
             if (refined !== null) memcache.unuse(refined);
-            refined = await this._refine(sourceMtime, dtsMtime);
+            const startTime = Date.now();
+            const tooLongTimer = setInterval(()=>{
+                this.bundler.main.reportMessage(IfTsbError.TooSlow, `${Date.now()-startTime}ms for compiling ${this.id.apath}`, true);
+            }, 5000);
+            try {
+                refined = await this._refine(sourceMtime, dtsMtime);
+            } finally {
+                clearInterval(tooLongTimer);
+            }
             if (refined === null) return null;
             memoryCache.register(refined.id.number, refined);
         }
@@ -1367,26 +1375,13 @@ class MakeTool {
             constructor(public readonly node:ts.Node) {}
         }
         const moduleAPath = this.module.id.apath.replace(/\\/g, '/');
-        const getNodeName = (node:ts.Node)=>{
-            if (ts.isClassDeclaration(node)) {
-                if (node.name == null) {
-                    // export default
-                    return 'default';
-                } else {
-                    return node.name.text;
-                }
-            } else if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
-                return node.name.text;
-            } else {
-                return null;
-            }
-        };
         const get = (node:ts.Node):ts.EntityName|ReturnDirect|null=> {
             let name:string|null;
-            if (ts.isModuleDeclaration(node)) {
+            if (tshelper.isModuleDeclaration(node)) {
                 const imported = new DeclImporter(this, this.globalVar).importFromModuleDecl(node);
                 if (imported === null) {
-                    this.helper.error(IfTsbError.Unsupported, `Unresolved module ${node.name}`);
+                    debugger;
+                    this.helper.error(IfTsbError.Unsupported, `Unresolved module ${node.name.text}`);
                     return new ReturnDirect(oriNode);
                 } else if (imported === GLOBAL) {
                     return new ReturnDirect(oriNode);
@@ -1411,17 +1406,17 @@ class MakeTool {
                     this.helper.error(IfTsbError.Unsupported, `Unexpected source file ${node.fileName}`);
                     return new ReturnDirect(oriNode);
                 }
-            } else if (ts.isModuleBlock(node)) {
+            } else if (ts.isModuleBlock(node) || ts.isVariableDeclarationList(node) || ts.isVariableStatement(node)) {
                 return get(node.parent);
             } else {
-                name = getNodeName(node);
+                name = tshelper.getNodeName(node);
             }
             if (name !== null) {
                 const res = get(node.parent);
                 if (res instanceof ReturnDirect) {
                     return res;
                 }
-                if (!tshelper.isExportingOnDecl(node)) {
+                if (!tshelper.isExporting(node)) {
                     if (ts.isTypeAliasDeclaration(node)) {
                         if (node.getSourceFile().fileName === this.sourceFile.fileName) {
                             return new ReturnDirect(node.type);
@@ -1429,7 +1424,7 @@ class MakeTool {
                         const type = node.type;
                         if (ts.isIdentifier(type)) return new ReturnDirect(type);
                     }
-                    this.helper.error(IfTsbError.Unsupported, `Need to export`);
+                    this.helper.error(IfTsbError.Unsupported, `Need to export ${tshelper.getNodeName(node)}`);
                     return new ReturnDirect(oriNode);
                 }
                 if (res === null ){

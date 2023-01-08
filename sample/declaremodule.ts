@@ -2,6 +2,7 @@ import { Test3 as Test4, Test5 } from "./types";
 import * as fs2 from 'fs';
 import {Dir as Dir2} from 'fs';
 import { IGlob } from 'glob';
+import { number } from ".";
 
 export class Test {
 }
@@ -9,10 +10,17 @@ export class Test {
 declare global {
     interface GlobalCls {
     }
+    namespace Namespace {
+        interface TypeInNamespace {
+        }
+    }
 }
 
 type GlobalClsRef = GlobalCls;
 type IGlob2 = IGlob;
+export enum Enum {
+}
+export const vardecl = 0;
 
 declare module "." {
     let unionTypes:UnionString;
@@ -27,6 +35,9 @@ declare module "." {
     let number:number;
     let globalCls:GlobalCls;
     let globalClsRef:GlobalClsRef;
+    let typeInNamespace:Namespace.TypeInNamespace;
+    let enumValue:Enum;
+    let a:typeof vardecl;
 
     interface Template<T> {
         v:T;
