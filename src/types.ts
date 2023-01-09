@@ -1,21 +1,21 @@
 import ts = require("typescript");
 
 export interface BundlerOptions {
-    clearConsole?:boolean;
-    verbose?:boolean;
-    checkCircularDependency?:boolean;
-    suppressDynamicImportErrors?:boolean;
-    faster?:boolean;
-    watchWaiting?:number;
-    globalModuleVarName?:string;
-    bundleExternals?:boolean;
-    externals?:string[];
-    cacheMemory?:number|string;
-    module?:string;
-    preimport?:string[];
-    concurrency?:number;
-    exportLib?:boolean;
-    noSourceMapWorker?:boolean;
+    clearConsole?: boolean;
+    verbose?: boolean;
+    checkCircularDependency?: boolean;
+    suppressDynamicImportErrors?: boolean;
+    faster?: boolean;
+    watchWaiting?: number;
+    globalModuleVarName?: string;
+    bundleExternals?: boolean;
+    externals?: string[];
+    cacheMemory?: number | string;
+    module?: string;
+    preimport?: string[];
+    concurrency?: number;
+    exportLib?: boolean;
+    noSourceMapWorker?: boolean;
 }
 
 export enum ExportRule {
@@ -23,45 +23,48 @@ export enum ExportRule {
     CommonJS,
     ES2015,
     Var,
-    Direct
+    Direct,
 }
 
 export enum IfTsbError {
-    InternalError=20000,
-    Unsupported=20001,
-    JsError=20002,
-    Dupplicated=20003,
-    WrongUsage=20004,
-    TooSlow=20005,
-    ModuleNotFound=2307,
+    InternalError = 20000,
+    Unsupported = 20001,
+    JsError = 20002,
+    Dupplicated = 20003,
+    WrongUsage = 20004,
+    TooSlow = 20005,
+    ModuleNotFound = 2307,
 }
 
 export interface BundlerOptionsWithOutput extends BundlerOptions {
-    output?:string;
+    output?: string;
 }
 
 export interface TsConfig {
-    exclude?:string[];
-    include?:string[];
-    entry?:string[]|Record<string, (string|BundlerOptionsWithOutput)>|string;
-    output?:string|null;
+    exclude?: string[];
+    include?: string[];
+    entry?:
+        | string[]
+        | Record<string, string | BundlerOptionsWithOutput>
+        | string;
+    output?: string | null;
 
-    bundlerOptions?:BundlerOptions;
-    
+    bundlerOptions?: BundlerOptions;
+
     /**
      * compiler option override.
      * if not define it, it will load [cwd]/tsconfig.json
      */
-    compilerOptions?:ts.CompilerOptions;
+    compilerOptions?: ts.CompilerOptions;
 }
 
 export enum ExternalMode {
-    NoExternal=0,
-    Manual=-1,
-    Preimport=-2,
+    NoExternal = 0,
+    Manual = -1,
+    Preimport = -2,
 }
 
 export interface PhaseListener {
-    onStart?():void;
-    onFinish?():void;
+    onStart?(): void;
+    onFinish?(): void;
 }

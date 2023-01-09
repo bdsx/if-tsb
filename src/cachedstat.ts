@@ -1,8 +1,8 @@
-import fs = require('fs');
-import { fsp } from './fsp';
+import fs = require("fs");
+import { fsp } from "./fsp";
 
 class Cache {
-    public stat?:fs.Stats;
+    public stat?: fs.Stats;
 
     public message?: string;
     public errno?: number;
@@ -10,17 +10,20 @@ class Cache {
     public path?: string;
     public syscall?: string;
 
-    constructor(public prom:Promise<fs.Stats|null>) {
-    }
+    constructor(public prom: Promise<fs.Stats | null>) {}
 
-    promise():Promise<fs.Stats> {
-        const err:NodeJS.ErrnoException = Error('');
-        return this.prom.then(stat=>{
+    promise(): Promise<fs.Stats> {
+        const err: NodeJS.ErrnoException = Error("");
+        return this.prom.then((stat) => {
             if (stat !== null) {
                 return stat;
             } else {
                 if (err.stack != null) {
-                    err.stack = 'Error: '+this.message+'\n'+err.stack.substr(err.stack.indexOf('\n'));
+                    err.stack =
+                        "Error: " +
+                        this.message +
+                        "\n" +
+                        err.stack.substr(err.stack.indexOf("\n"));
                 }
                 err.message = this.message!;
                 err.errno = this.errno;
@@ -32,7 +35,7 @@ class Cache {
         });
     }
 
-    setError(err:NodeJS.ErrnoException):void {
+    setError(err: NodeJS.ErrnoException): void {
         this.message = err.message;
         this.errno = err.errno;
         this.code = err.code;
@@ -40,8 +43,8 @@ class Cache {
         this.syscall = err.syscall;
     }
 
-    error():NodeJS.ErrnoException {
-        const err:NodeJS.ErrnoException = Error(this.message);
+    error(): NodeJS.ErrnoException {
+        const err: NodeJS.ErrnoException = Error(this.message);
         err.errno = this.errno;
         err.code = this.code;
         err.path = this.path;
@@ -52,26 +55,29 @@ class Cache {
 
 const caches = new Map<string, Cache>();
 
-export function cachedStat(apath:string):Promise<fs.Stats> {
+export function cachedStat(apath: string): Promise<fs.Stats> {
     let cache = caches.get(apath);
     if (cache == null) {
-        const prom = fsp.stat(apath).then(stat=>{
-            cache!.stat = stat;
-            return stat;
-        }, err=>{
-            cache!.setError(err);
-            return null;
-        });
+        const prom = fsp.stat(apath).then(
+            (stat) => {
+                cache!.stat = stat;
+                return stat;
+            },
+            (err) => {
+                cache!.setError(err);
+                return null;
+            }
+        );
         cache = new Cache(prom);
         caches.set(apath, cache);
     }
     return cache.promise();
 }
 export namespace cachedStat {
-    export function clear():void {
+    export function clear(): void {
         caches.clear();
     }
-    export function sync(apath:string):fs.Stats {
+    export function sync(apath: string): fs.Stats {
         let cache = caches.get(apath);
         if (cache != null) {
             if (cache.stat != null) return cache.stat;
@@ -98,7 +104,7 @@ export namespace cachedStat {
         if (cache.message != null) throw cache.error();
         return cache.stat!;
     }
-    export async function exists(apath:string):Promise<boolean> {
+    export async function exists(apath: string): Promise<boolean> {
         try {
             await cachedStat(apath);
             return true;
@@ -106,7 +112,7 @@ export namespace cachedStat {
             return false;
         }
     }
-    export function existsSync(apath:string):boolean {
+    export function existsSync(apath: string): boolean {
         try {
             cachedStat.sync(apath);
             return true;
@@ -114,10 +120,10 @@ export namespace cachedStat {
             return false;
         }
     }
-    export async function mtime(apath:string):Promise<number> {
+    export async function mtime(apath: string): Promise<number> {
         return +(await cachedStat(apath)).mtime;
     }
-    export function mtimeSync(apath:string):number {
+    export function mtimeSync(apath: string): number {
         return +cachedStat.sync(apath).mtime;
     }
 }

@@ -1,18 +1,13 @@
-
-import value = require('./moduleexport');
-import './declaremodule';
-import './jsfile';
+import value = require("./moduleexport");
+import "./declaremodule";
+import "./jsfile";
 
 export let x = 0;
 
-let b:number = value.v;
+let b: number = value.v;
 
-interface A {
+interface A {}
 
-}
+export let c: A = {};
 
-export let c:A = {};
-
-
-export class Test2 {
-}
+export class Test2 {}

@@ -3,7 +3,7 @@
  * Please DO NOT modify this directly.
  * If it's needed to update, Modify bdsx-lib/minecraft/enums_ini/*.ini instead
  */
- declare module "." {
+declare module "." {
     enum AbilitiesIndex {
         Build = 3,
         Mine,
