@@ -1,5 +1,3 @@
-import { Reporter } from "./reporter";
-import { IfTsbError } from "./types";
 import { resolved } from "./util";
 
 export class ValueLock<T> {
@@ -9,7 +7,7 @@ export class ValueLock<T> {
 
     public resolveWriter: (writer: T) => void;
 
-    constructor(private readonly reporter: Reporter) {
+    constructor() {
         this.writingProm = new Promise((resolve) => {
             this.resolveWriter = resolve;
         });
@@ -37,11 +35,7 @@ export class ValueLock<T> {
                 this.csEntered = false;
                 return;
             }
-            this.reporter.reportMessage(
-                IfTsbError.InternalError,
-                "unlock more than lock"
-            );
-            return;
+            throw Error(`unlock more than lock`);
         }
         const resolve = this.csResolve.pop()!;
         resolve();

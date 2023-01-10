@@ -1,4 +1,4 @@
-import { identifierValidating } from "./checkvar";
+import { identifierValidating } from "../checkvar";
 
 export class NameMap<T> extends Map<string, T> {
     getFreeName(name: string): string {

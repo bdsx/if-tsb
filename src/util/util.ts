@@ -1,6 +1,6 @@
 import ts = require("typescript");
 import path = require("path");
-import { PhaseListener, TsConfig } from "./types";
+import { PhaseListener, TsConfig } from "../types";
 
 export const resolved = Promise.resolve();
 

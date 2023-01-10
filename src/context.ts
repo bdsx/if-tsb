@@ -3,19 +3,18 @@ import * as fs from "fs";
 import * as path from "path";
 import * as ts from "typescript";
 import { Bundler } from "./bundler";
+import { BundlerModule, BundlerModuleId } from "./module";
+import { IfTsbError, TsConfig } from "./types";
 import {
     cacheDir,
     cacheMapPath,
     CACHE_VERSION,
     getCacheFilePath,
-} from "./cachedir";
-import { fsp } from "./fsp";
-import { BundlerModule, BundlerModuleId } from "./module";
-import { cachedStat } from "./cachedstat";
-import { namelock } from "./namelock";
-import { Reporter } from "./reporter";
-import { IfTsbError, TsConfig } from "./types";
-import { printDiagnostrics } from "./util";
+} from "./util/cachedir";
+import { cachedStat } from "./util/cachedstat";
+import { fsp } from "./util/fsp";
+import { namelock } from "./util/namelock";
+import { printDiagnostrics } from "./util/util";
 
 const defaultCompilerOptions = ts.getDefaultCompilerOptions();
 
@@ -49,7 +48,7 @@ export class IdMap extends Map<string, BundlerModuleId> {
     cacheTo?: number;
 }
 
-export class BundlerMainContext implements Reporter {
+export class BundlerMainContext {
     public errorCount = 0;
     private readonly idmap: Map<string, IdMap>;
     private readonly accessedOutputs = new Set<string>();

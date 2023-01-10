@@ -1,9 +1,9 @@
 import ts = require("typescript");
 import fs = require("fs");
 import path = require("path");
-import { fsp } from "./fsp";
-import { memcache } from "./memmgr";
-import { cachedStat } from "./cachedstat";
+import { fsp } from "../util/fsp";
+import { memcache } from "../memmgr";
+import { cachedStat } from "../util/cachedstat";
 
 export class SourceFileData {
     public sourceFile: ts.SourceFile;

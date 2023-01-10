@@ -1,5 +1,5 @@
 import { parentPort, workerData } from "worker_threads";
-import { tsbuild, tswatch } from "./util";
+import { tsbuild, tswatch } from "./util/util";
 if (parentPort === null) {
     console.error(`Invalid usage`);
     process.exit(-1);

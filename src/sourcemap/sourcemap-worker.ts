@@ -2,7 +2,7 @@ import sourceMap = require("source-map");
 import path = require("path");
 
 import { parentPort, workerData } from "worker_threads";
-import { fsp } from "./fsp";
+import { fsp } from "../util/fsp";
 
 if (parentPort === null) {
     console.error(`Invalid usage`);

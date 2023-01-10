@@ -1,13 +1,13 @@
 if (!Date.now) Date.now = () => +new Date();
 
 import { Bundler } from "./bundler";
-import { cacheDir } from "./cachedir";
+import { cacheDir } from "./util/cachedir";
 import { BundlerMainContext } from "./context";
-import { fsp } from "./fsp";
+import { fsp } from "./util/fsp";
 import { memcache } from "./memmgr";
 import { CACHE_MEMORY_DEFAULT, memoryCache } from "./module";
-import { cachedStat } from "./cachedstat";
-import { namelock } from "./namelock";
+import { cachedStat } from "./util/cachedstat";
+import { namelock } from "./util/namelock";
 import { PhaseListener, TsConfig } from "./types";
 import {
     defaultFormatHost,
@@ -16,8 +16,8 @@ import {
     time,
     tsbuild,
     tswatch,
-} from "./util";
-import { FilesWatcher } from "./watch";
+} from "./util/util";
+import { FilesWatcher } from "./util/watch";
 import fs = require("fs");
 import path = require("path");
 import ts = require("typescript");

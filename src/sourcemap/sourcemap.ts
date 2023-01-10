@@ -1,6 +1,6 @@
 import path = require("path");
 import type { Worker } from "worker_threads";
-import { fsp } from "./fsp";
+import { fsp } from "../util/fsp";
 
 export abstract class SourceMap {
     abstract toDataURL(): Promise<string>;

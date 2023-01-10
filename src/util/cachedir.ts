@@ -1,6 +1,5 @@
 import path = require("path");
 import fs = require("fs");
-import { BundlerModuleId } from "./module";
 
 function findUp(pathname: string): string | null {
     let directory = process.cwd();

@@ -1,16 +1,16 @@
 import * as path from "path";
 import * as ts from "typescript";
 import type { Bundler } from "./bundler";
-import { CACHE_SIGNATURE, getCacheFilePath } from "./cachedir";
-import { cachedStat } from "./cachedstat";
+import { CACHE_SIGNATURE, getCacheFilePath } from "./util/cachedir";
+import { cachedStat } from "./util/cachedstat";
 import { ErrorPosition } from "./errpos";
-import { fsp } from "./fsp";
-import { LineStripper } from "./linestripper";
+import { fsp } from "./util/fsp";
+import { LineStripper } from "./util/linestripper";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
-import { namelock } from "./namelock";
-import { SourceFileData } from "./sourcefilecache";
-import { WriterStream as FileWriter } from "./streamwriter";
+import { namelock } from "./util/namelock";
+import { SourceFileData } from "./sourcemap/sourcefilecache";
+import { WriterStream as FileWriter } from "./util/streamwriter";
 import { tshelper } from "./tshelper";
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
 import {
@@ -21,7 +21,7 @@ import {
     printDiagnostrics,
     ScriptKind,
     SkipableTaskQueue,
-} from "./util";
+} from "./util/util";
 export const CACHE_MEMORY_DEFAULT = 1024 * 1024 * 1024;
 memcache.maximum = CACHE_MEMORY_DEFAULT;
 export const memoryCache = new memcache.Map<number, RefinedModule>();

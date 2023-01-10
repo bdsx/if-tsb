@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { bundle } from "./index";
-import { time } from "./util";
+import { time } from "./util/util";
 import fs = require("fs");
 import path = require("path");
 

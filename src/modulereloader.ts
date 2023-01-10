@@ -1,5 +1,5 @@
 import ts = require("typescript");
-import { FilesWatcher } from "./watch";
+import { FilesWatcher } from "./util/watch";
 
 export function registerModuleReloader(
     compilerOptions?: ts.CompilerOptions

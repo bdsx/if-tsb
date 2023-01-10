@@ -1,12 +1,12 @@
 import ts = require("typescript");
 import path = require("path");
 import fs = require("fs");
-import { cachedStat } from "./cachedstat";
+import { cachedStat } from "./util/cachedstat";
 import { identifierValidating } from "./checkvar";
-import { ConcurrencyQueue } from "./concurrent";
+import { ConcurrencyQueue } from "./util/concurrent";
 import { BundlerMainContext, IdMap } from "./context";
-import { CounterLock } from "./counterlock";
-import { fsp } from "./fsp";
+import { CounterLock } from "./util/counterlock";
+import { fsp } from "./util/fsp";
 import { memcache } from "./memmgr";
 import {
     BundlerModule,
@@ -14,10 +14,9 @@ import {
     CheckState,
     RefinedModule,
 } from "./module";
-import { NameMap } from "./namemap";
-import { SourceFileCache } from "./sourcefilecache";
-import { SourceMap, SourceMapDirect } from "./sourcemap";
-import { WriterStream as FileWriter, WriterStream } from "./streamwriter";
+import { NameMap } from "./util/namemap";
+import { SourceFileCache } from "./sourcemap/sourcefilecache";
+import { WriterStream as FileWriter, WriterStream } from "./util/streamwriter";
 import { ExportRule, ExternalMode, IfTsbError, TsConfig } from "./types";
 import {
     changeExt,
@@ -25,10 +24,11 @@ import {
     getScriptKind,
     parsePostfix,
     splitContent,
-} from "./util";
-import { ValueLock } from "./valuelock";
+} from "./util/util";
+import { ValueLock } from "./util/valuelock";
 import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
+import { SourceMap, SourceMapDirect } from "./sourcemap/sourcemap";
 
 const libmap = new Map<string, Bundler>();
 type WritingLock = ValueLock<[FileWriter, FileWriter | null]>;
@@ -600,8 +600,6 @@ export class Bundler {
         const entryModule = this.getModule(apath, null);
         entryModule.isEntry = true;
         entryModule.isAppended = true;
-
-        this.deplist.push(apath);
         return entryModule;
     }
 
@@ -609,7 +607,7 @@ export class Bundler {
         if (this.lock !== null) throw Error("bundler is busy");
         this.clear();
 
-        const lock = (this.lock = new ValueLock(this.main));
+        const lock = (this.lock = new ValueLock());
 
         if (this.tsconfig !== null) this.deplist.push(this.tsconfig);
 
@@ -621,6 +619,15 @@ export class Bundler {
             entryModule = this._getEntryModule(this.entryApath);
             if (this.declaration) entryModule.needDeclaration = true;
             if (this.verbose) console.log(`entry - ${entryModule.mpath}`);
+            if (!(await cachedStat.exists(this.entryApath))) {
+                this.main.reportMessage(
+                    IfTsbError.ModuleNotFound,
+                    `Cannot find entry module '${entryModule.rpath}'`
+                );
+                this.lock = null;
+                return false;
+            }
+            this.deplist.push(this.entryApath);
             entryRefined = await entryModule.refine();
             if (entryRefined === null) {
                 this.lock = null;
