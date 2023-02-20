@@ -25,7 +25,7 @@
                 "<node_internals>/**"
             ],
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../ftp-kr"],
+            "args": ["${workspaceFolder}\\src\\cli.ts", "../ftp-kr", "-w"],
             "outFiles": [
                 "${workspaceFolder}/**/*.js"
             ]

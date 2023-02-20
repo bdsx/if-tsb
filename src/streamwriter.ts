@@ -12,7 +12,7 @@ export class WriterStream
         this.stream = fs.createWriteStream(output, {encoding: 'utf-8'});
         this.stream.on('error', (err:Error)=>{ this.err = err; });
     }
-    write(data:string):Promise<void> {
+    write(data:string|Buffer):Promise<void> {
         if (this.err !== null) throw this.err;
         if (this.stream.write(data)) return resolved;
         return new Promise(resolve=>this.stream.once('drain', resolve));

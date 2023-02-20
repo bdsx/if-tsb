@@ -98,6 +98,7 @@ export class Bundler {
         delete this.tsoptions.outDir;
         delete this.tsoptions.out;
         this.tsoptions.allowJs = true;
+        this.tsoptions.resolveJsonModule = true;
         this.tsoptions.outDir = '/.if-tsb';
 
         if (this.tsoptions.inlineSourceMap) {
@@ -322,6 +323,13 @@ export class Bundler {
     }
     
     async write(lock:WritingLock, module:BundlerModule, refined:RefinedModule):Promise<void> {
+        if (refined.content === null) {
+            throw Error(`${refined.id.apath}: no content`);
+        }
+        if (!module.isEntry && !refined.contentEndsWith(Buffer.from('},\n'))) {
+            const content = refined.content.toString();
+            debugger;
+        }
         const [jsWriter, dtsWriter] = await lock.lock();
         try {
             await concurrent(
@@ -440,7 +448,7 @@ export class Bundler {
             clearInterval(tooLongTimer);
             (async()=>{
                 if (refined === null) {
-                    module.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${module.mpath}'`);
+                    module.error(null, IfTsbError.ModuleNotFound, `Cannot find module '${module.mpath}'. refine failed.`);
                     try {
                         const [jsWriter, dtsWriter] = await lock.lock();
                         await jsWriter.write(`${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); }\n`);

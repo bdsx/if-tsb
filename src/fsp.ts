@@ -43,6 +43,13 @@ export namespace fsp {
             else resolve(data);
         }))
     }
+    export function readFileBuffer(path:string):Promise<Buffer> {
+        if (verbose) console.log(`readFile ${path}`);
+        return new Promise((resolve, reject)=>fs.readFile(path, null, (err, data)=>{
+            if (err) reject(err);
+            else resolve(data);
+        }))
+    }
     export function writeFileSync(path:string, data:string):void {
         fs.writeFileSync(path, data, 'utf-8');
     }

@@ -44,6 +44,7 @@ const builtin = new Set<string>([
     'v8',
     'vm',
     'zlib',
+    'tls',
 ]);
 let moduleReloaderRegistered = false;
 
@@ -89,19 +90,36 @@ export class ImportInfo {
 
 }
 
+function bufferSplit(buf:Buffer, code:number):Buffer[] {
+    let prev = 0;
+    const out:Buffer[] = [];
+    
+    for (;;) {
+        const next = buf.indexOf(code, prev);
+        if (next === -1) {
+            out.push(buf.subarray(prev));
+            return out;
+        }
+        out.push(buf.subarray(prev, next));
+        prev = next+1;
+    }
+}
+
 export class RefinedModule {
     firstLineComment:string|null = null;
     sourceMapOutputLineOffset:number = 0;
     outputLineCount:number;
     imports:ImportInfo[] = [];
     sourceMapText:string|null = null;
-    content:string = '';
-    declaration:string|null = null;
+    content:Buffer|null = null;
+    declaration:Buffer|null = null;
     size:number;
     errored = false;
     sourceMtime:number;
     tsconfigMtime:number;
 
+
+    private matchedRpath:string = '';
     private mtime:number|null = null;
 
     constructor(public readonly id:BundlerModuleId) {
@@ -109,10 +127,16 @@ export class RefinedModule {
 
     private readonly saving = new SkipableTaskQueue;
 
+    contentEndsWith(buf:Uint8Array):boolean {
+        if (this.content === null) return false;
+        return this.content.subarray(this.content.length-buf.length).equals(buf);
+    }
+
     checkRelativePath(rpath:string):boolean {
-        const lineend = this.content.indexOf('\n');
+        if (this.content === null) return false;
+        const lineend = this.content.indexOf(10);
         if (lineend === -1) return false;
-        const matched = this.content.substr(0, lineend).match(/^\/\/ (.+)$/);
+        const matched = this.content.subarray(0, lineend).toString().match(/^\/\/ (.+)$/);
         if (matched === null) return false;
         return matched[1] === rpath;
     }
@@ -121,7 +145,7 @@ export class RefinedModule {
         this.firstLineComment = null;
         this.imports.length = 0;
         this.sourceMapText = null;
-        this.content = '';
+        this.content = null;
         this.size = 0;
     }
 
@@ -153,14 +177,14 @@ export class RefinedModule {
 
     async load():Promise<boolean> {
         const cachepath = getCacheFilePath(this.id);
-        let content:string;
+        let content:Buffer;
         try {
             await namelock.lock(this.id.number);
-            content = await fsp.readFile(cachepath);
+            content = await fsp.readFileBuffer(cachepath);
         } finally {
             namelock.unlock(this.id.number);
         }
-        if (!content.endsWith(CACHE_SIGNATURE)) return false;
+        if (!content.subarray(content.length-CACHE_SIGNATURE.length).equals(CACHE_SIGNATURE)) return false;
         const [
             sourceMtime,
             tsconfigMtime,
@@ -171,16 +195,16 @@ export class RefinedModule {
             sourceMapText,
             source,
             declaration
-        ] = content.split('\0');
-        this.sourceMtime = +sourceMtime;
-        this.tsconfigMtime = +tsconfigMtime;
-        this.imports = imports === '' ? [] : ImportInfo.parse(imports);
-        this.firstLineComment = firstLineComment || null;
-        this.sourceMapOutputLineOffset = +sourceMapOutputLineOffset;
-        this.outputLineCount = +outputLineCount;
-        this.sourceMapText = sourceMapText || null;
+        ] = bufferSplit(content, 0);
+        this.sourceMtime = +sourceMtime.toString();
+        this.tsconfigMtime = +tsconfigMtime.toString();
+        this.imports = imports.length === 0 ? [] : ImportInfo.parse(imports.toString());
+        this.firstLineComment = firstLineComment.length === 0 ? null :firstLineComment.toString();
+        this.sourceMapOutputLineOffset = +sourceMapOutputLineOffset.toString();
+        this.outputLineCount = +outputLineCount.toString();
+        this.sourceMapText = sourceMapText.length === 0 ? null : sourceMapText.toString();
         this.content = source;
-        this.declaration = declaration || null;
+        this.declaration = declaration.length === 0 ? null : declaration;
         this.size = this.content.length + 2048;
         return true;
     }
@@ -305,7 +329,7 @@ export class BundlerModule {
 
     private async _refine(sourceMtime:number):Promise<RefinedModule|null> {
         if (sourceMtime === -1) {
-            this.error(null, IfTsbError.ModuleNotFound, `Cannot find module ${this.mpath}`);
+            this.error(null, IfTsbError.ModuleNotFound, `Cannot find module ${this.mpath}. refine failed`);
             return null;
         }
 
@@ -313,7 +337,7 @@ export class BundlerModule {
         this.importLines.length = 0;
 
         const refined = new RefinedModule(this.id);
-        refined.content = `// ${this.rpath}\n`;
+        let content = `// ${this.rpath}\n`;
         refined.sourceMtime = sourceMtime;
         refined.tsconfigMtime = this.bundler.tsconfigMtime;
 
@@ -608,25 +632,25 @@ export class BundlerModule {
                     this.error(null, IfTsbError.Unsupported, `if-tsb does not support export JSON to ${bundler.exportVarName}`);
                     break;
                 case ExportRule.Var:
-                    refined.content += `return ${sourceFile.text.trim()};\n`;
+                    content += `return ${sourceFile.text.trim()};\n`;
                     break;
                 default:
-                    refined.content += `module.exports=${sourceFile.text.trim()};\n`;
+                    content += `module.exports=${sourceFile.text.trim()};\n`;
                     break;
                 }
             }
             else
             {
                 if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
-                    refined.content += `${refined.id.varName}(){\n`;
+                    content += `${refined.id.varName}(){\n`;
                 } else {
-                    refined.content += `${refined.id.varName}:function(){\n`;
+                    content += `${refined.id.varName}:function(){\n`;
                 }
-                refined.content += `if(${bundler.globalVarName}.${refined.id.varName}.exports!=null) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
-                refined.content += `\nreturn ${bundler.globalVarName}.${refined.id.varName}.exports=${sourceFile.text};\n},\n`;
+                content += `if(${bundler.globalVarName}.${refined.id.varName}.exports!=null) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
+                content += `\nreturn ${bundler.globalVarName}.${refined.id.varName}.exports=${sourceFile.text};\n},\n`;
             }
         } else {
-            let content = '';
+            let pureContent = '';
             const filePathForTesting = filepath.replace(/\\/g, '/');
             const superHost = bundler.compilerHost;
             const compilerHost:ts.CompilerHost = Object.setPrototypeOf({
@@ -643,7 +667,7 @@ export class BundlerModule {
                     if (text === '') text = ' ';
                     const info = getScriptKind(name);
                     if (info.kind === ts.ScriptKind.JS) {
-                        content = text;
+                        pureContent = text;
                     } else if (info.kind === ts.ScriptKind.External) {
                         if (that.needDeclaration) {
                             declaration = text;
@@ -684,7 +708,7 @@ export class BundlerModule {
                     printDiagnostrics(diagnostics);
                 }
             }
-            if (content === '') {
+            if (pureContent === '') {
                 if (diagnostics == null) {
                     printDiagnostrics(bundler.program.getSyntacticDiagnostics(sourceFile));
                 }
@@ -694,18 +718,18 @@ export class BundlerModule {
             }
             
             // content
-            const stripper = new LineStripper(content);
+            const stripper = new LineStripper(pureContent);
             refined.firstLineComment = stripper.strip(line=>line.startsWith('#'));
             stricted = (stripper.strip(line=>line==='"use strict";') !== null) || (stripper.strip(line=>line==="'use strict';") !== null);
             stripper.strip(line=>line==='Object.defineProperty(exports, "__esModule", { value: true });');
             stripper.strip(line=>line==='exports.__esModule = true;');
         
-            let lastLineIdx = content.lastIndexOf('\n')+1;
-            let contentEnd = content.length;
-            const lastLine = content.substr(lastLineIdx);
+            let lastLineIdx = pureContent.lastIndexOf('\n')+1;
+            let contentEnd = pureContent.length;
+            const lastLine = pureContent.substr(lastLineIdx);
             if (lastLine.startsWith('//# sourceMappingURL=')) {
                 lastLineIdx -= 2;
-                if (content.charAt(lastLineIdx) !== '\r') lastLineIdx++;
+                if (pureContent.charAt(lastLineIdx) !== '\r') lastLineIdx++;
                 contentEnd = lastLineIdx;
             }
             if (this.isEntry) {
@@ -717,24 +741,25 @@ export class BundlerModule {
                 case ExportRule.Var:
                     if (useExports)
                     {
-                        refined.content += `${bundler.constKeyword} exports=${exportTarget};\n`;
+                        content += `var exports=${exportTarget};\n`;
                         if (useModule)
                         {
                             if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015)
                             {
-                                refined.content += `const module={exports}\n`;
+                                content += `var module={exports};\n`;
                             }
                             else
                             {
-                                refined.content += `var module={exports:exports}\n`;
+                                content += `var module={exports:exports};\n`;
                             }
+                            content += `${bundler.constKeyword} ${bundler.globalVarName}_m=module;\n`;
                         }
                     }
                     else
                     {
                         if (useModule)
                         {
-                            refined.content += `${bundler.constKeyword} module={}\n`;
+                            content += `var module={};\n`;
                         }
                     }
                     break;
@@ -743,20 +768,21 @@ export class BundlerModule {
                 const useStrict = !bundler.useStrict && stricted;
     
                 if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
-                    refined.content += `${refined.id.varName}(){\n`;
+                    content += `${refined.id.varName}(){\n`;
                 } else {
-                    refined.content += `${refined.id.varName}:function(){\n`;
+                    content += `${refined.id.varName}:function(){\n`;
                 }
-                if (useStrict) refined.content += '"use strict";\n';
+                if (useStrict) content += '"use strict";\n';
                 
-                refined.content += `if(${bundler.globalVarName}.${refined.id.varName}.exports!=null) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
-                refined.content += `${bundler.constKeyword} exports=${bundler.globalVarName}.${refined.id.varName}.exports={};\n`;
+                content += `if(${bundler.globalVarName}.${refined.id.varName}.exports!=null) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
+                content += `var exports=${bundler.globalVarName}.${refined.id.varName}.exports={};\n`;
                 if (useModule) {
                     if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
-                        refined.content += `const module={exports};\n`;
+                        content += `var module={exports};\n`;
                     } else {
-                        refined.content += `var module={exports:exports};\n`;
+                        content += `var module={exports:exports};\n`;
                     }
+                    content += `${bundler.constKeyword} ${bundler.globalVarName}_m=module;\n`;
                 }
             }
     
@@ -766,7 +792,7 @@ export class BundlerModule {
                 if (useFileName)
                 {
                     if (path.sep !== '/') rpath = rpath.split(path.sep).join('/');
-                    refined.content += `${prefix}__filename=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
+                    content += `${prefix}__filename=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
                     importer.addExternalList('path', ExternalMode.Preimport, null, false);
                     importer.addExternalList('__resolve', ExternalMode.Manual, null, false);
                     importer.addExternalList('__dirname', ExternalMode.Manual, null, false);
@@ -775,17 +801,17 @@ export class BundlerModule {
                 {
                     rpath = path.dirname(rpath);
                     if (path.sep !== '/') rpath = rpath.split(path.sep).join('/');
-                    refined.content += `${prefix}__dirname=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
+                    content += `${prefix}__dirname=${bundler.globalVarName}.__resolve(${JSON.stringify(rpath)});\n`;
                     importer.addExternalList('path', ExternalMode.Preimport, null, false);
                     importer.addExternalList('__resolve', ExternalMode.Manual, null, false);
                     importer.addExternalList('__dirname', ExternalMode.Manual, null, false);
                 }
             }
-            refined.content += stripper.strippedComments;
+            content += stripper.strippedComments;
     
-            refined.sourceMapOutputLineOffset = count(refined.content, '\n') - stripper.stripedLine;
-            refined.content += content.substring(stripper.index, contentEnd);
-            refined.content += '\n';
+            refined.sourceMapOutputLineOffset = count(content, '\n') - stripper.stripedLine;
+            content += pureContent.substring(stripper.index, contentEnd);
+            content += '\n';
             if (this.isEntry) {
                 switch (bundler.exportRule) {
                 case ExportRule.Var:
@@ -793,25 +819,25 @@ export class BundlerModule {
                     {
                         if (useModule)
                         {
-                            refined.content += `return module.exports;\n`;
+                            content += `return ${bundler.globalVarName}_m.exports;\n`;
                         }
                         else
                         {
-                            refined.content += `return exports;\n`;
+                            content += `return exports;\n`;
                         }
                     }
                     else
                     {
-                        refined.content += `return {};\n`;
+                        content += `return {};\n`;
                     }
                     break;
                 }
             }
             else
             {
-                if (useModule) refined.content += `return ${bundler.globalVarName}.${refined.id.varName}.exports=module.exports;\n`;
-                else refined.content += `return exports;\n`;
-                refined.content += `},\n`;
+                if (useModule) content += `return ${bundler.globalVarName}.${refined.id.varName}.exports=${bundler.globalVarName}_m.exports;\n`;
+                else content += `return exports;\n`;
+                content += `},\n`;
             }
 
             // declaration
@@ -819,32 +845,34 @@ export class BundlerModule {
                 const stripper = new LineStripper(declaration);
                 stripper.strip(line=>line.startsWith('#'));
 
-                refined.declaration = `// ${this.rpath}\n`;
+                let decltext = `// ${this.rpath}\n`;
                 if (this.isEntry) {
                 } else {
                     if (exportEquals) {
-                        refined.declaration += `namespace ${refined.id.varName}_module {\n`;
+                        decltext += `namespace ${refined.id.varName}_module {\n`;
                     } else {
-                        refined.declaration += `export namespace ${refined.id.varName} {\n`;
+                        decltext += `export namespace ${refined.id.varName} {\n`;
                     }
                 }
-                refined.content += stripper.strippedComments;
-                refined.declaration += declaration.substring(stripper.index);
-                refined.declaration += '\n';
+                content += stripper.strippedComments;
+                decltext += declaration.substring(stripper.index);
+                decltext += '\n';
                 if (this.isEntry) {
                 } else {
-                    refined.declaration += `}\n`;
+                    decltext += `}\n`;
                     if (exportEquals) {
-                        refined.declaration += `export import ${refined.id.varName} = ${refined.id.varName}_module._exported\n`;
+                        decltext += `export import ${refined.id.varName} = ${refined.id.varName}_module._exported\n`;
                     }
                 }
+                refined.declaration = Buffer.from(decltext);
             } else if (this.needDeclaration) {
                 const errormsg = `'${this.mpath}.d.ts' is not emitted`;
                 this.error(null, IfTsbError.ModuleNotFound, errormsg);
-                refined.declaration = `// ${this.rpath}\n`;
-                refined.declaration += `export namespace ${refined.id.varName} {\n`;
-                refined.declaration += `// ${errormsg}\n`;
-                refined.declaration += `}\n`;
+                let decltext = `// ${this.rpath}\n`;
+                decltext += `export namespace ${refined.id.varName} {\n`;
+                decltext += `// ${errormsg}\n`;
+                decltext += `}\n`;
+                refined.declaration = Buffer.from(decltext);
             }
 
             // sourcemap
@@ -854,8 +882,9 @@ export class BundlerModule {
         for (const ref of refs) {
             ref.release();
         }
-        refined.outputLineCount = count(refined.content, '\n');
-        refined.size = refined.content.length + 2048;
+        refined.outputLineCount = count(content, '\n');
+        refined.content = Buffer.from(content);
+        refined.size = content.length + 2048;
         refined.save(bundler);
         return refined;
     }
@@ -995,7 +1024,7 @@ abstract class Transformer<T> {
                 return importPath.mpath;
             }
             this.refined.errored = true;
-            this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+            this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}'. from ${this.module.id.apath}`);
             return null;
         }
 
@@ -1005,7 +1034,7 @@ abstract class Transformer<T> {
             childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
             if (!getMtime.existsSync(childmoduleApath)) {
                 this.refined.errored = true;
-                this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+                this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}'. existsSync(${childmoduleApath}) failed`);
                 return null;
             }
         }
@@ -1028,7 +1057,7 @@ abstract class Transformer<T> {
             }
         }, oldsys);
         let module = ts.nodeModuleNameResolver(importPath.importName, this.module.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
-        if (!module.resolvedModule && importPath.importName === '.') 
+        if (module.resolvedModule == null && importPath.importName === '.') 
             module = ts.nodeModuleNameResolver('./index', this.module.id.apath, this.bundler.tsoptions, sys, this.bundler.moduleResolutionCache);
         const info = module.resolvedModule;
         if (info == null) {
@@ -1039,7 +1068,7 @@ abstract class Transformer<T> {
                 if (!this.bundler.bundleExternals) return null;
             }
             this.refined.errored = true;
-            this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+            this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}'. from ${this.module.id.apath}`);
             return null;
         }
 
@@ -1056,7 +1085,7 @@ abstract class Transformer<T> {
             childmoduleApath = childmoduleApath.substr(0, childmoduleApath.length-kind.ext.length+1)+'js';
             if (!getMtime.existsSync(childmoduleApath)) {
                 this.refined.errored = true;
-                this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}' or its corresponding type declarations.`);
+                this.module.error(this.getErrorPosition(), IfTsbError.ModuleNotFound, `Cannot find module '${importPath.importName}'. existsSync(${childmoduleApath}) failed`);
                 return null;
             }
         }
