@@ -2,14 +2,17 @@
     "entry": {
         "./src/cli.ts": "./cli.bundle.js",
         "./src/index.ts": "./index.bundle.js",
-        "./src/sourcemap-worker.ts": "./worker.bundle.js",
-        "./src/ts-worker.ts": "./tsworker.bundle.js"
+        "./src/sourcemap/sourcemap-worker.ts": "./worker.bundle.js",
+        "./src/ts-worker.ts": "./tsworker.bundle.js",
+        "./sample/index.ts": "./sample/index.bundle.js"
     },
     "bundlerOptions": {
         "verbose": true,
         "noSourceMapWorker": true
     },
     "compilerOptions": {
+        "typeRoots": [ "sample/types" ],
+        "types": [ "node", "sample" ],
         "target": "ES2015",
         "lib": [ "ES2015" ],
         "module": "CommonJS",

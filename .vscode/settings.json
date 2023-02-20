@@ -1,0 +1,8 @@
+{
+    "npm.autoDetect": "off",
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "[typescript]": {
+        "editor.formatOnSave": true,
+        "files.trimTrailingWhitespace": true
+    }
+}

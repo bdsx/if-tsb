@@ -1,15 +1,15 @@
 import { resolved } from "./util";
 
 export class CounterLock {
-    private resolver:(()=>void)|null = null;
-    private prom:Promise<void>|null = null;
+    private resolver: (() => void) | null = null;
+    private prom: Promise<void> | null = null;
     private counter = 0;
 
-    increase():void {
+    increase(): void {
         this.counter++;
     }
 
-    decrease():void {
+    decrease(): void {
         this.counter--;
         if (this.counter === 0) {
             if (this.resolver !== null) {
@@ -20,14 +20,14 @@ export class CounterLock {
         }
     }
 
-    ifZero():boolean {
+    ifZero(): boolean {
         return this.counter === 0;
     }
 
-    waitZero():Promise<void> {
+    waitZero(): Promise<void> {
         if (this.counter === 0) return resolved;
         if (this.prom === null) {
-            this.prom = new Promise<void>(resolve=>{
+            this.prom = new Promise<void>((resolve) => {
                 this.resolver = resolve;
             });
         }

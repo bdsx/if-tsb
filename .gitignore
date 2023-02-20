@@ -3,3 +3,5 @@
 *.map
 /node_modules
 !/reflect.d.ts
+!/sample/jsfile.d.ts
+!/sample/jsfile.js
