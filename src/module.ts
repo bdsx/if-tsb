@@ -1518,7 +1518,7 @@ export class BundlerModule {
                 } else {
                     declaration += `export namespace ${refined.id.varName} {\n`;
                 }
-                content += stripper.strippedComments;
+                decltext += stripper.strippedComments;
                 decltext += declaration.substring(stripper.index);
                 decltext += "\n}\n";
                 if (exportEquals) {

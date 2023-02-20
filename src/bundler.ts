@@ -353,10 +353,6 @@ export class Bundler {
         if (refined.content === null) {
             throw Error(`${refined.id.apath}: no content`);
         }
-        if (!module.isEntry && !refined.contentEndsWith(Buffer.from("},\n"))) {
-            const content = refined.content.toString();
-            debugger;
-        }
         const [jsWriter, dtsWriter] = await lock.lock();
         try {
             await concurrent(
