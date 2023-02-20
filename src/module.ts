@@ -1514,9 +1514,9 @@ export class BundlerModule {
 
                 decltext = `// ${this.rpath}\n`;
                 if (exportEquals) {
-                    declaration += `namespace ${refined.id.varName}_module {\n`;
+                    decltext += `namespace ${refined.id.varName}_module {\n`;
                 } else {
-                    declaration += `export namespace ${refined.id.varName} {\n`;
+                    decltext += `export namespace ${refined.id.varName} {\n`;
                 }
                 decltext += stripper.strippedComments;
                 decltext += declaration.substring(stripper.index);
