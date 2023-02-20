@@ -8,6 +8,10 @@ let b: number = value.v;
 
 interface A {}
 
+export type UnionString = "as" | "df";
+
+export type TypesType = A | Test2;
+
 export let c: A = {};
 
 export class Test2 {}

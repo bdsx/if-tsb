@@ -1,3 +1,4 @@
+import path = require("path");
 import ts = require("typescript");
 import { FilesWatcher } from "./util/watch";
 
@@ -23,8 +24,9 @@ export function registerModuleReloader(
         mpath: string
     ) {
         const exports = oldRequire.apply(this, arguments);
-        const module: NodeModule = exports.module;
-        watcher.add(null, module.filename);
+        if (mpath.indexOf(path.sep + "node_modules" + path.sep) === -1) {
+            watcher.add(null, mpath);
+        }
         return exports;
     };
 }

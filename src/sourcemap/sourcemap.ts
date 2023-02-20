@@ -24,7 +24,7 @@ class SourceMapWorker extends SourceMap {
         try {
             const { Worker } = workerModule;
             this.worker = new Worker(
-                path.join(__dirname, "../worker.bundle.js"),
+                path.join(__dirname, "../../worker.bundle.js"),
                 { workerData: { output, verbose: fsp.verbose } }
             );
             this.worker.unref();

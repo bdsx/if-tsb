@@ -1,5 +1,5 @@
 import { parentPort, workerData } from "worker_threads";
-import { tsbuild, tswatch } from "./util/util";
+import { tshelper } from "./tshelper";
 if (parentPort === null) {
     console.error(`Invalid usage`);
     process.exit(-1);
@@ -8,7 +8,7 @@ if (parentPort === null) {
 const tsconfig = workerData.tsconfig;
 const basedir = workerData.basedir;
 if (workerData.watch) {
-    tswatch(tsconfig, basedir, {
+    tshelper.tswatch(tsconfig, basedir, {
         onStart() {
             parentPort!.postMessage("start");
         },
@@ -17,7 +17,7 @@ if (workerData.watch) {
         },
     });
 } else {
-    tsbuild(tsconfig, basedir);
+    tshelper.tsbuild(tsconfig, basedir);
     parentPort.postMessage(null);
     parentPort.close();
 }

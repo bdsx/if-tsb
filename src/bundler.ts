@@ -1,7 +1,6 @@
 import ts = require("typescript");
 import path = require("path");
 import fs = require("fs");
-import { FileWriter } from "bdsx-util/writer/filewriter";
 import { identifierValidating } from "./checkvar";
 import { BundlerMainContext, IdMap } from "./context";
 import { memcache } from "./memmgr";
@@ -20,6 +19,7 @@ import { ConcurrencyQueue } from "./util/concurrent";
 import { CounterLock } from "./util/counterlock";
 import { fsp } from "./util/fsp";
 import { NameMap } from "./util/namemap";
+import { WriterStream } from "./util/streamwriter";
 import {
     changeExt,
     concurrent,
@@ -32,7 +32,7 @@ import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
 
 const libmap = new Map<string, Bundler>();
-type WritingLock = ValueLock<[FileWriter, FileWriter | null]>;
+type WritingLock = ValueLock<[WriterStream, WriterStream | null]>;
 
 export class Bundler {
     private readonly names = new NameMap<BundlerModuleId>();
@@ -64,7 +64,7 @@ export class Bundler {
     public readonly useStrict: boolean;
 
     private readonly moduleByName = new Map<string, BundlerModule>();
-    private readonly globalDeclarationModules: string[] = [];
+    private readonly globalDeclarationModules: Buffer[] = [];
     public readonly deplist: string[] = [];
     public readonly taskQueue: ConcurrencyQueue;
     public readonly tsconfigMtime: number;
@@ -353,7 +353,7 @@ export class Bundler {
         if (refined.content === null) {
             throw Error(`${refined.id.apath}: no content`);
         }
-        if (!module.isEntry && !refined.contentEndsWith(Buffer.from('},\n'))) {
+        if (!module.isEntry && !refined.contentEndsWith(Buffer.from("},\n"))) {
             const content = refined.content.toString();
             debugger;
         }
@@ -396,16 +396,16 @@ export class Bundler {
     private async _startWrite(
         lock: WritingLock,
         firstLineComment: string | null
-    ): Promise<[FileWriter, FileWriter | null]> {
+    ): Promise<[WriterStream, WriterStream | null]> {
         await fsp.mkdirRecursive(this.outdir);
 
         await lock.lockWithoutWriter();
-        let jsWriter: FileWriter | undefined;
-        let dtsWriter: FileWriter | null = null as any;
+        let jsWriter: WriterStream | undefined;
+        let dtsWriter: WriterStream | null = null as any;
         try {
             await concurrent(
                 async () => {
-                    jsWriter = new FileWriter(this.output);
+                    jsWriter = new WriterStream(this.output);
                     if (firstLineComment !== null) {
                         await jsWriter.write(firstLineComment + "\n");
                         this.sourceMapLineOffset++;
@@ -459,7 +459,9 @@ export class Bundler {
                 },
                 async () => {
                     if (!this.declaration) return;
-                    dtsWriter = new FileWriter(changeExt(this.output, "d.ts"));
+                    dtsWriter = new WriterStream(
+                        changeExt(this.output, "d.ts")
+                    );
                     if (this.exportLib) {
                         if (this.exportRule === ExportRule.ES2015) {
                             await dtsWriter.write(
@@ -497,7 +499,7 @@ export class Bundler {
         } finally {
             lock.unlock();
         }
-        const res: [FileWriter, FileWriter | null] = [jsWriter!, dtsWriter];
+        const res: [WriterStream, WriterStream | null] = [jsWriter!, dtsWriter];
         lock.resolveWriter(res);
         return res;
     }
@@ -620,8 +622,8 @@ export class Bundler {
             }
         }
 
-        let jsWriter: FileWriter;
-        let dtsWriter: FileWriter | null;
+        let jsWriter: WriterStream;
+        let dtsWriter: WriterStream | null;
         try {
             [jsWriter, dtsWriter] = await this._startWrite(
                 lock,

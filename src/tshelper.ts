@@ -52,6 +52,7 @@ export namespace tshelper {
         "v8",
         "vm",
         "zlib",
+        "tls",
     ]);
     export const defaultCompilerOptions = ts.getDefaultCompilerOptions();
 

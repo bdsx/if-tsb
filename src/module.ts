@@ -4,7 +4,7 @@ import type { Bundler } from "./bundler";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
 import { SourceFileData } from "./sourcemap/sourcefilecache";
-import { WriterStream } from "./streamwriter";
+import { WriterStream } from "./util/streamwriter";
 import { tshelper } from "./tshelper";
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
 import { CACHE_SIGNATURE, getCacheFilePath } from "./util/cachedir";

@@ -73,7 +73,7 @@ function findCacheDir(name: string) {
 export const cacheDir = findCacheDir("if-tsb") || "./.if-tsb.cache";
 export const cacheMapPath = path.join(cacheDir, "cachemap.json");
 export const CACHE_VERSION = "TSBC-0.14";
-export const CACHE_SIGNATURE = "\0" + CACHE_VERSION;
+export const CACHE_SIGNATURE = Buffer.from('\0'+CACHE_VERSION);
 
 export function getCacheFilePath(id: number): string {
     return path.join(cacheDir, id + "");

@@ -1,8 +1,8 @@
-import { Test3 as Test4, Test5 } from "./types";
 import * as fs2 from "fs";
 import { Dir as Dir2 } from "fs";
 import { IGlob } from "glob";
 import { number } from ".";
+import { Test3 as Test4, Test5 } from "./types";
 
 export class Test {}
 
