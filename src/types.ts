@@ -1,4 +1,5 @@
 import ts = require("typescript");
+import { tshelper } from "./tshelper";
 
 export interface BundlerOptions {
     clearConsole?: boolean;
@@ -40,7 +41,7 @@ export interface BundlerOptionsWithOutput extends BundlerOptions {
     output?: string;
 }
 
-export interface TsConfig {
+export interface TsConfig extends tshelper.TsConfigJson {
     exclude?: string[];
     include?: string[];
     entry?:
@@ -62,9 +63,4 @@ export enum ExternalMode {
     NoExternal = 0,
     Manual = -1,
     Preimport = -2,
-}
-
-export interface PhaseListener {
-    onStart?(): void;
-    onFinish?(): void;
 }

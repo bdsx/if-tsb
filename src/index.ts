@@ -1,22 +1,16 @@
 if (!Date.now) Date.now = () => +new Date();
 
 import { Bundler } from "./bundler";
-import { cacheDir } from "./util/cachedir";
 import { BundlerMainContext } from "./context";
-import { fsp } from "./util/fsp";
 import { memcache } from "./memmgr";
 import { CACHE_MEMORY_DEFAULT, memoryCache } from "./module";
+import { tshelper } from "./tshelper";
+import { TsConfig } from "./types";
+import { cacheDir } from "./util/cachedir";
 import { cachedStat } from "./util/cachedstat";
+import { fsp } from "./util/fsp";
 import { namelock } from "./util/namelock";
-import { PhaseListener, TsConfig } from "./types";
-import {
-    defaultFormatHost,
-    printDiagnostrics,
-    resolved,
-    time,
-    tsbuild,
-    tswatch,
-} from "./util/util";
+import { resolved, time } from "./util/util";
 import { FilesWatcher } from "./util/watch";
 import fs = require("fs");
 import path = require("path");
@@ -89,7 +83,7 @@ export namespace bundle {
             console.error(
                 ts.formatDiagnosticsWithColorAndContext(
                     [configFile.error],
-                    defaultFormatHost
+                    tshelper.defaultFormatHost
                 )
             );
         }
@@ -98,7 +92,7 @@ export namespace bundle {
     export function watch(
         entries?: string[] | null,
         output?: string | TsConfig | null,
-        opts: PhaseListener = {}
+        opts: tshelper.PhaseListener = {}
     ): void {
         if (entries == null) entries = ["."];
         (async () => {
@@ -246,7 +240,7 @@ export function tscompile(
     tsconfig: TsConfig,
     basedir: string = ".",
     watch?: boolean,
-    opts: PhaseListener & { noWorker?: boolean } = {}
+    opts: tshelper.PhaseListener & { noWorker?: boolean } = {}
 ): Promise<void> {
     try {
         if (opts.noWorker) throw 0;
@@ -284,10 +278,10 @@ export function tscompile(
         }
     } catch (_) {
         if (watch) {
-            tswatch(tsconfig, basedir, opts);
+            tshelper.tswatch(tsconfig, basedir, opts);
         } else {
             if (opts.onStart != null) opts.onStart();
-            tsbuild(tsconfig, basedir);
+            tshelper.tsbuild(tsconfig, basedir);
             if (opts.onFinish != null) opts.onFinish();
         }
         return Promise.resolve();
@@ -296,6 +290,6 @@ export function tscompile(
 
 export namespace tscompile {
     export function report(diagnostics: readonly ts.Diagnostic[]): void {
-        printDiagnostrics(diagnostics);
+        tshelper.printDiagnostrics(diagnostics);
     }
 }

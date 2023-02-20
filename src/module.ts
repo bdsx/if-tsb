@@ -1,24 +1,24 @@
+import { FileWriter } from "bdsx-util/writer/filewriter";
 import * as path from "path";
 import * as ts from "typescript";
 import type { Bundler } from "./bundler";
-import { CACHE_SIGNATURE, getCacheFilePath } from "./util/cachedir";
-import { cachedStat } from "./util/cachedstat";
-import { ErrorPosition } from "./errpos";
-import { fsp } from "./util/fsp";
-import { LineStripper } from "./util/linestripper";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
-import { namelock } from "./util/namelock";
 import { SourceFileData } from "./sourcemap/sourcefilecache";
-import { WriterStream as FileWriter } from "./util/streamwriter";
 import { tshelper } from "./tshelper";
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
+import { CACHE_SIGNATURE, getCacheFilePath } from "./util/cachedir";
+import { cachedStat } from "./util/cachedstat";
+import { ErrorPosition } from "./util/errpos";
+import { fsp } from "./util/fsp";
+import { ImportHelper } from "./util/importhelper";
+import { LineStripper } from "./util/linestripper";
+import { namelock } from "./util/namelock";
 import {
     count,
     dirnameModulePath,
     getScriptKind,
     joinModulePath,
-    printDiagnostrics,
     ScriptKind,
     SkipableTaskQueue,
 } from "./util/util";
@@ -85,7 +85,7 @@ export class ImportInfo {
             const codepos =
                 line == null
                     ? null
-                    : new ErrorPosition(line, column, width, lineText);
+                    : new ErrorPosition(apath, line, column, width, lineText);
             out.push(new ImportInfo(apath, mpath, codepos, declaration));
         }
         return out;
@@ -433,32 +433,8 @@ export class BundlerModule {
         }
     }
 
-    makeErrorPosition(node: ts.Node): ErrorPosition | null {
-        const source = node.getSourceFile();
-        if (source == null) {
-            return null;
-        }
-        const pos = source.getLineAndCharacterOfPosition(node.getStart());
-        const width = node.getWidth();
-
-        const sourceText = source.getFullText();
-        const lines = source.getLineStarts();
-        const start = lines[pos.line];
-        const linenum = pos.line + 1;
-        const end =
-            linenum < lines.length ? lines[linenum] - 1 : sourceText.length;
-
-        const lineText = sourceText.substring(start, end);
-        return {
-            line: linenum,
-            column: pos.character,
-            lineText: lineText,
-            width: width,
-        };
-    }
-
     errorWithNode(node: ts.Node, code: number, message: string): void {
-        return this.error(this.makeErrorPosition(node), code, message);
+        return this.error(ErrorPosition.fromNode(node), code, message);
     }
 
     private async _refine(
@@ -1305,7 +1281,7 @@ export class BundlerModule {
             );
             if (!bundler.faster && res.diagnostics.length !== 0) {
                 refined!.errored = true;
-                printDiagnostrics(res.diagnostics);
+                tshelper.printDiagnostrics(res.diagnostics);
             }
             if (diagnostics != null) {
                 diagnostics.push(
@@ -1313,12 +1289,12 @@ export class BundlerModule {
                 );
                 if (diagnostics.length !== 0) {
                     refined!.errored = true;
-                    printDiagnostrics(diagnostics);
+                    tshelper.printDiagnostrics(diagnostics);
                 }
             }
             if (content === "") {
                 if (diagnostics == null) {
-                    printDiagnostrics(
+                    tshelper.printDiagnostrics(
                         bundler.program.getSyntacticDiagnostics(sourceFile)
                     );
                 }
@@ -1635,7 +1611,7 @@ class RefineHelper {
             const ori = (node as any).original;
             if (ori) node = ori;
             if (node.pos === -1) continue;
-            return this.module.makeErrorPosition(node);
+            return ErrorPosition.fromNode(node);
         }
         return null;
     }
@@ -1828,56 +1804,21 @@ class MakeTool {
             },
             oldsys
         );
-        let module = ts.nodeModuleNameResolver(
-            importPath.importName,
-            this.module.id.apath,
-            this.bundler.tsoptions,
+        const helper = new ImportHelper(
             sys,
+            this.bundler.tsoptions,
             this.bundler.moduleResolutionCache
         );
-        if (!module.resolvedModule && importPath.importName === ".")
-            module = ts.nodeModuleNameResolver(
-                "./index",
-                this.module.id.apath,
-                this.bundler.tsoptions,
-                sys,
-                this.bundler.moduleResolutionCache
-            );
-        const info = module.resolvedModule;
-        if (info == null) {
-            if (!importPath.importName.startsWith(".")) {
-                if (importPath.isBuiltInModule()) {
-                    return PREIMPORT;
-                }
-                if (!this.bundler.bundleExternals) return null;
-            }
-            this.helper.importError(importPath.importName);
-            return null;
-        }
-
-        if (info.isExternalLibraryImport) {
-            if (!this.bundler.bundleExternals) {
-                if (this.delcaration) return PREIMPORT;
-                return null;
-            }
-        }
-
-        let childmoduleApath = path.isAbsolute(info.resolvedFileName)
-            ? path.join(info.resolvedFileName)
-            : path.join(this.bundler.basedir, info.resolvedFileName);
-        const kind = getScriptKind(childmoduleApath);
-        if (kind.kind === ts.ScriptKind.External) {
-            childmoduleApath =
-                childmoduleApath.substr(
-                    0,
-                    childmoduleApath.length - kind.ext.length + 1
-                ) + "js";
-            if (!cachedStat.existsSync(childmoduleApath)) {
+        const res = helper.resolve(this.module.id.apath, importPath.importName);
+        if (res.isBuiltIn) return PREIMPORT;
+        if (res.isExternal) {
+            if (!this.bundler.bundleExternals) return null;
+            if (res.fileNotFound) {
                 this.helper.importError(importPath.importName);
                 return null;
             }
         }
-        return childmoduleApath;
+        return res.fileName;
     }
 
     createIdentifierChain(

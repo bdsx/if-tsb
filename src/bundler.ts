@@ -1,12 +1,9 @@
 import ts = require("typescript");
 import path = require("path");
 import fs = require("fs");
-import { cachedStat } from "./util/cachedstat";
+import { FileWriter } from "bdsx-util/writer/filewriter";
 import { identifierValidating } from "./checkvar";
-import { ConcurrencyQueue } from "./util/concurrent";
 import { BundlerMainContext, IdMap } from "./context";
-import { CounterLock } from "./util/counterlock";
-import { fsp } from "./util/fsp";
 import { memcache } from "./memmgr";
 import {
     BundlerModule,
@@ -14,10 +11,15 @@ import {
     CheckState,
     RefinedModule,
 } from "./module";
-import { NameMap } from "./util/namemap";
 import { SourceFileCache } from "./sourcemap/sourcefilecache";
-import { WriterStream as FileWriter, WriterStream } from "./util/streamwriter";
+import { SourceMap, SourceMapDirect } from "./sourcemap/sourcemap";
+import { tshelper } from "./tshelper";
 import { ExportRule, ExternalMode, IfTsbError, TsConfig } from "./types";
+import { cachedStat } from "./util/cachedstat";
+import { ConcurrencyQueue } from "./util/concurrent";
+import { CounterLock } from "./util/counterlock";
+import { fsp } from "./util/fsp";
+import { NameMap } from "./util/namemap";
 import {
     changeExt,
     concurrent,
@@ -28,7 +30,6 @@ import {
 import { ValueLock } from "./util/valuelock";
 import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
-import { SourceMap, SourceMapDirect } from "./sourcemap/sourcemap";
 
 const libmap = new Map<string, Bundler>();
 type WritingLock = ValueLock<[FileWriter, FileWriter | null]>;
@@ -127,26 +128,7 @@ export class Bundler {
         }
 
         const that = this;
-        this.sys = Object.setPrototypeOf(
-            {
-                getCurrentDirectory(): string {
-                    return that.basedir;
-                },
-                directoryExists(filepath: string): boolean {
-                    try {
-                        return cachedStat
-                            .sync(that.resolvePath(filepath))
-                            .isDirectory();
-                    } catch (err) {
-                        return false;
-                    }
-                },
-                fileExists(filepath: string): boolean {
-                    return cachedStat.existsSync(that.resolvePath(filepath));
-                },
-            },
-            ts.sys
-        );
+        this.sys = tshelper.createSystem(this.basedir);
 
         this.compilerHost = ts.createCompilerHost(this.tsoptions);
         this.compilerHost.getCurrentDirectory = () =>
@@ -270,11 +252,8 @@ export class Bundler {
                 this.exportRule === ExportRule.Var;
         }
 
-        this.moduleResolutionCache = ts.createModuleResolutionCache(
-            this.basedir,
-            ts.sys.useCaseSensitiveFileNames
-                ? (v) => v.toLocaleLowerCase()
-                : (v) => v
+        this.moduleResolutionCache = tshelper.createModuleResolutionCache(
+            this.basedir
         );
         if (entry !== null) {
             const apath = path.isAbsolute(entry)
@@ -341,9 +320,7 @@ export class Bundler {
     }
 
     resolvePath(filepath: string): string {
-        return path.isAbsolute(filepath)
-            ? path.join(filepath)
-            : path.join(this.basedir, filepath);
+        return this.sys.resolvePath(filepath);
     }
 
     addModuleVarName(moduleId: BundlerModuleId): BundlerModuleId | null {
@@ -512,7 +489,7 @@ export class Bundler {
         } finally {
             lock.unlock();
         }
-        const res: [WriterStream, WriterStream | null] = [jsWriter!, dtsWriter];
+        const res: [FileWriter, FileWriter | null] = [jsWriter!, dtsWriter];
         lock.resolveWriter(res);
         return res;
     }

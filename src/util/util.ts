@@ -1,14 +1,7 @@
 import ts = require("typescript");
 import path = require("path");
-import { PhaseListener, TsConfig } from "../types";
 
 export const resolved = Promise.resolve();
-
-export const defaultFormatHost: ts.FormatDiagnosticsHost = {
-    getCurrentDirectory: () => ts.sys.getCurrentDirectory(),
-    getCanonicalFileName: (fileName) => fileName,
-    getNewLine: () => ts.sys.newLine,
-};
 
 export function printNode(node: ts.Node, name: string, tab: string): void {
     let line = node.getFullText();
@@ -211,19 +204,27 @@ export class ScriptKind {
     get modulePath(): string {
         return this.apath.substr(0, this.apath.length - this.ext.length);
     }
+    private _ext(ext: string): string {
+        return (
+            this.apath.substr(0, this.apath.length - this.ext.length + 1) + ext
+        );
+    }
+    js(): string {
+        return this._ext("js");
+    }
+    ts(): string {
+        return this._ext("ts");
+    }
 }
 
-export function getScriptKind(filepath: string): ScriptKind {
-    let ext = path.extname(filepath).toUpperCase();
+export function getScriptKind(apath: string): ScriptKind {
+    let ext = path.extname(apath).toUpperCase();
     let kind = _kindMap.get(ext) || ts.ScriptKind.Unknown;
     switch (kind) {
         case ts.ScriptKind.TS:
-            const nidx = filepath.lastIndexOf(
-                ".",
-                filepath.length - ext.length - 1
-            );
+            const nidx = apath.lastIndexOf(".", apath.length - ext.length - 1);
             if (nidx !== -1) {
-                const next = filepath.substr(nidx).toUpperCase();
+                const next = apath.substr(nidx).toUpperCase();
                 if (next === ".D.TS") {
                     ext = next;
                     kind = ts.ScriptKind.External;
@@ -231,7 +232,7 @@ export function getScriptKind(filepath: string): ScriptKind {
             }
             break;
     }
-    return new ScriptKind(kind, ext, filepath);
+    return new ScriptKind(kind, ext, apath);
 }
 
 export function parsePostfix(
@@ -388,64 +389,4 @@ export function joinModulePath(...pathes: string[]): string {
 
     if (out.length === 0) return outstr.substr(0, outstr.length - 1);
     else return outstr + out.join("/");
-}
-
-export function tsbuild(tsconfig: TsConfig, basedir: string): void {
-    const parsed = ts.parseJsonConfigFileContent(tsconfig, ts.sys, basedir);
-    const program = ts.createProgram(parsed.fileNames, parsed.options);
-    const emitResult = program.emit();
-    const allDiagnostics = ts
-        .getPreEmitDiagnostics(program)
-        .concat(emitResult.diagnostics);
-    if (allDiagnostics.length !== 0) {
-        console.error(
-            ts.formatDiagnosticsWithColorAndContext(
-                allDiagnostics,
-                defaultFormatHost
-            )
-        );
-    }
-}
-
-export function tswatch(
-    tsconfig: TsConfig,
-    basedir: string,
-    opts: PhaseListener = {}
-): void {
-    const parsed = ts.parseJsonConfigFileContent(
-        tsconfig,
-        ts.sys,
-        path.resolve(basedir)
-    );
-    printDiagnostrics(parsed.errors);
-    const host = ts.createWatchCompilerHost(
-        parsed.fileNames,
-        parsed.options,
-        ts.sys,
-        ts.createSemanticDiagnosticsBuilderProgram,
-        (diagnostic) => printDiagnostrics([diagnostic]),
-        (diagnostic) => {
-            switch (diagnostic.code) {
-                case 6031: // start
-                case 6032: // change
-                    if (opts.onStart != null) opts.onStart();
-                    break;
-            }
-            printDiagnostrics([diagnostic]);
-            if (diagnostic.code === 6194) {
-                // finish
-                if (opts.onFinish != null) opts.onFinish();
-            }
-        },
-        parsed.projectReferences,
-        parsed.watchOptions
-    );
-    ts.createWatchProgram(host);
-}
-
-export function printDiagnostrics(diagnostics: readonly ts.Diagnostic[]): void {
-    if (diagnostics.length === 0) return;
-    console.error(
-        ts.formatDiagnosticsWithColorAndContext(diagnostics, defaultFormatHost)
-    );
 }

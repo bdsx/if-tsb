@@ -4,19 +4,16 @@ import * as path from "path";
 import * as ts from "typescript";
 import { Bundler } from "./bundler";
 import { BundlerModule, BundlerModuleId } from "./module";
-import { IfTsbError, TsConfig } from "./types";
+import { tshelper } from "./tshelper";
+import { BundlerOptionsWithOutput, IfTsbError, TsConfig } from "./types";
 import {
     cacheDir,
     cacheMapPath,
     CACHE_VERSION,
     getCacheFilePath,
 } from "./util/cachedir";
-import { cachedStat } from "./util/cachedstat";
 import { fsp } from "./util/fsp";
 import { namelock } from "./util/namelock";
-import { printDiagnostrics } from "./util/util";
-
-const defaultCompilerOptions = ts.getDefaultCompilerOptions();
 
 function getOutFileName(options: TsConfig, name: string): string {
     if (options.output != null) {
@@ -197,26 +194,7 @@ export class BundlerMainContext {
         width: number
     ): void {
         this.errorCount++;
-
-        const linestr = line + "";
-        console.log(
-            `${colors.cyan(source)}:${colors.yellow(linestr)}:${colors.yellow(
-                column + ""
-            )} - ${colors.red("error")} ${colors.gray(
-                "TS" + code + ":"
-            )} ${message}`
-        );
-        console.log();
-
-        if (line !== 0) {
-            console.log(colors.black(colors.bgWhite(linestr)) + " " + lineText);
-            console.log(
-                colors.bgWhite(" ".repeat(linestr.length)) +
-                    " ".repeat(column + 1) +
-                    colors.red("~".repeat(width))
-            );
-            console.log();
-        }
+        tshelper.report(source, line, column, code, message, lineText, width);
     }
 
     /**
@@ -224,11 +202,7 @@ export class BundlerMainContext {
      */
     reportMessage(code: number, message: string, noError?: boolean): void {
         if (!noError) this.errorCount++;
-        console.log(
-            `${
-                noError ? colors.gray("message") : colors.red("error")
-            } ${colors.gray(`TS${code}:`)} ${message}`
-        );
+        tshelper.reportMessage(code, message, noError);
     }
 
     /**
@@ -316,17 +290,21 @@ export class BundlerMainContext {
         return map;
     }
 
-    private _makeBundlers(
-        options: TsConfig,
-        basedir: string,
-        tsconfig: string | null,
-        compilerOptions: ts.CompilerOptions
+    makeBundlersWithPath(
+        configPath: string | null,
+        outputOrConfig?: string | TsConfig | null
     ): Bundler[] {
-        for (const key in defaultCompilerOptions) {
-            if (compilerOptions[key] !== undefined) continue;
-            compilerOptions[key] = defaultCompilerOptions[key];
+        const options: (tshelper.ParsedTsConfig & TsConfig) | null =
+            tshelper.parseTsConfig(configPath, outputOrConfig);
+        if (options.entry === undefined) {
+            tshelper.reportMessage(
+                tshelper.ErrorCode.ModuleNotFound,
+                "Entry not found"
+            );
+            return [];
         }
 
+        const compilerOptions = options.compilerOptions;
         if (compilerOptions.module !== ts.ModuleKind.CommonJS) {
             if (compilerOptions.module === undefined)
                 compilerOptions.module = ts.ModuleKind.None;
@@ -336,7 +314,11 @@ export class BundlerMainContext {
             compilerOptions.module = ts.ModuleKind.CommonJS;
         }
 
-        let entry = options.entry;
+        let entry:
+            | Record<string, string | BundlerOptionsWithOutput>
+            | string
+            | null
+            | undefined = options.entry;
         if (entry == null) {
             const name = "./index.ts";
             entry = { [name]: getOutFileName(options, name) };
@@ -363,7 +345,7 @@ export class BundlerMainContext {
                 );
                 output = getOutFileName(newoptions, entryfile);
             }
-            const resolvedOutput = path.resolve(basedir, output);
+            const resolvedOutput = path.resolve(options.basedir, output);
             if (this.outputs.has(resolvedOutput)) {
                 this.reportMessage(
                     IfTsbError.Dupplicated,
@@ -374,12 +356,12 @@ export class BundlerMainContext {
             try {
                 const bundler = new Bundler(
                     this,
-                    basedir,
+                    options.basedir,
                     resolvedOutput,
                     newoptions,
                     entryfile,
                     [],
-                    tsconfig,
+                    options.tsconfigPath,
                     compilerOptions,
                     options
                 );
@@ -399,115 +381,7 @@ export class BundlerMainContext {
         return bundlers;
     }
 
-    makeBundlersWithPath(
-        configPath: string,
-        output?: string | TsConfig | null
-    ): Bundler[] {
-        configPath = path.resolve(configPath);
-        try {
-            if (output != null && typeof output === "object") {
-                const basedir = configPath;
-                const parsed = ts.parseJsonConfigFileContent(
-                    output,
-                    ts.sys,
-                    basedir
-                );
-                printDiagnostrics(parsed.errors);
-                return this._makeBundlers(
-                    output,
-                    basedir,
-                    null,
-                    parsed.options
-                );
-            } else {
-                let basedir: string;
-                const stat = fs.statSync(configPath);
-                if (stat.isDirectory()) {
-                    basedir = configPath;
-                    const npath = path.join(configPath, "tsconfig.json");
-                    if (cachedStat.existsSync(npath)) {
-                        configPath = npath;
-                    } else {
-                        configPath = path.join(configPath, "index.ts");
-                        if (!cachedStat.existsSync(configPath)) {
-                            this.reportMessage(
-                                IfTsbError.ModuleNotFound,
-                                "Entry not found"
-                            );
-                            return [];
-                        }
-                    }
-                } else {
-                    basedir = path.dirname(configPath);
-                }
-
-                if (configPath.endsWith(".json")) {
-                    const configFile = ts.readConfigFile(
-                        configPath,
-                        ts.sys.readFile
-                    );
-                    if (configFile.error != null) {
-                        printDiagnostrics([configFile.error]);
-                    }
-
-                    const parsed = ts.parseJsonConfigFileContent(
-                        configFile.config,
-                        ts.sys,
-                        basedir
-                    );
-                    printDiagnostrics(parsed.errors);
-                    const options = configFile.config as TsConfig;
-
-                    if (typeof output === "string") options.output = output;
-                    return this._makeBundlers(
-                        options,
-                        basedir,
-                        configPath,
-                        parsed.options
-                    );
-                } else {
-                    return this._makeBundlers(
-                        { entry: configPath, output },
-                        basedir,
-                        null,
-                        {}
-                    );
-                }
-            }
-        } catch (err) {
-            this.reportFromCatch(err);
-            return [];
-        }
-    }
-
     makeBundlers(options: TsConfig): Bundler[] {
-        let tsoptions: ts.CompilerOptions;
-        let tsconfig: string | null = null;
-        const basedir = process.cwd();
-
-        try {
-            if (options.compilerOptions) {
-                tsoptions = options.compilerOptions;
-            } else {
-                tsconfig = path.resolve("./tsconfig.json");
-                const configFile = ts.readConfigFile(tsconfig, ts.sys.readFile);
-                if (configFile.error != null) {
-                    printDiagnostrics([configFile.error]);
-                }
-
-                const parsed = ts.parseJsonConfigFileContent(
-                    configFile.config,
-                    ts.sys,
-                    "./"
-                );
-                printDiagnostrics(parsed.errors);
-                tsoptions = parsed.options;
-            }
-        } catch (err) {
-            this.reportFromCatch(err);
-            return [];
-        }
-
-        return this._makeBundlers(options, basedir, tsconfig, tsoptions);
+        return this.makeBundlersWithPath(null, options);
     }
 }
