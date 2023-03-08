@@ -946,7 +946,6 @@ export class BundlerModule {
                                 out.push(
                                     ctx.factory.createImportEqualsDeclaration(
                                         undefined,
-                                        undefined,
                                         false,
                                         identifier,
                                         node.expression as ts.ModuleReference
@@ -1003,7 +1002,6 @@ export class BundlerModule {
                                 if (res === NOIMPORT) return undefined;
                                 return ctx.factory.createImportEqualsDeclaration(
                                     undefined,
-                                    undefined,
                                     false,
                                     node.name,
                                     res.node
@@ -1056,7 +1054,6 @@ export class BundlerModule {
                                         }
                                         return ctx.factory.createImportEqualsDeclaration(
                                             undefined,
-                                            undefined,
                                             false,
                                             clause.namedBindings.name,
                                             res.node
@@ -1067,7 +1064,6 @@ export class BundlerModule {
                                             .namedBindings.elements) {
                                             out.push(
                                                 ctx.factory.createImportEqualsDeclaration(
-                                                    undefined,
                                                     undefined,
                                                     false,
                                                     element.name,
@@ -1085,7 +1081,6 @@ export class BundlerModule {
                             } else if (clause.name != null) {
                                 // import a from 'module';
                                 return ctx.factory.createImportEqualsDeclaration(
-                                    undefined,
                                     undefined,
                                     false,
                                     clause.name,
