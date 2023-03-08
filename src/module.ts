@@ -737,8 +737,8 @@ export class BundlerModule {
         const declFactory = (sourceFile: ts.SourceFile) => {
             return (ctx: ts.TransformationContext) => {
                 const tool = new MakeTool(ctx, helper, sourceFile, true);
-                const importer = new DeclImporter(tool, tool.globalVar);
-                const arrImporter = new StringArrayImporter(tool, [
+                const importer = new DeclNameImporter(tool, tool.globalVar);
+                const arrImporter = new DeclStringImporter(tool, [
                     bundler.globalVarName,
                 ]);
 
@@ -1730,8 +1730,13 @@ class RefineHelper {
 
 const PREIMPORT = "#pre";
 type PREIMPORT = "#pre";
+
+/**
+ * using for if-tsb/reflect
+ */
 const NOIMPORT = "#noimp";
 type NOIMPORT = "#noimp";
+
 const GLOBAL = "#global";
 type GLOBAL = "#global";
 
@@ -1764,6 +1769,9 @@ class MakeTool {
         );
     }
 
+    /**
+     * @return null if not found with errors
+     */
     getImportPath(importPath: ParsedImportPath): string | null {
         const oldsys = this.bundler.sys;
         const sys: ts.System = Object.setPrototypeOf(
@@ -1793,7 +1801,7 @@ class MakeTool {
                 this.bundler.moduleResolutionCache
             );
         const info = module.resolvedModule;
-        if (info == null) {
+        if (info === undefined) {
             if (!importPath.importName.startsWith(".")) {
                 return importPath.mpath;
             }
@@ -1898,7 +1906,7 @@ class MakeTool {
         const get = (node: ts.Node): ts.EntityName | ReturnDirect | null => {
             let name: string | null;
             if (tshelper.isModuleDeclaration(node)) {
-                const imported = new DeclImporter(
+                const imported = new DeclNameImporter(
                     this,
                     this.globalVar
                 ).importFromModuleDecl(node);
@@ -2037,11 +2045,8 @@ abstract class Importer<T> {
 
     abstract makeIdentifier(name: string): T;
     abstract makePropertyAccess(left: T, right: string): T;
-    abstract importLocal(childModule: BundlerModule): T;
 
     preimport(importPath: ParsedImportPath): ImportResult<T> {
-        if (importPath.importName.startsWith("."))
-            throw Error(`Invalid preimport ${importPath.importName}`);
         const module = this.helper.addExternalList(
             importPath.mpath,
             ExternalMode.Preimport,
@@ -2105,6 +2110,10 @@ abstract class Importer<T> {
             return res;
         }
     }
+
+    importLocal(childModule: BundlerModule): T {
+        return this.makePropertyAccess(this.globalVar, childModule.id.varName);
+    }
 }
 
 class JsImporter extends Importer<ts.Expression> {
@@ -2124,40 +2133,30 @@ class JsImporter extends Importer<ts.Expression> {
     }
 }
 
-class DeclImporter extends Importer<ts.EntityName> {
-    makeIdentifier(name: string): ts.EntityName {
-        return this.factory.createIdentifier(name);
-    }
-    makePropertyAccess(left: ts.EntityName, right: string): ts.EntityName {
-        return this.factory.createQualifiedName(left, right);
-    }
-    importLocal(childModule: BundlerModule): ts.EntityName {
-        return this.makePropertyAccess(this.globalVar, childModule.id.varName);
-    }
+abstract class DeclImporter<T> extends Importer<T> {
     importFromStringLiteral(
         importPath: ParsedImportPath
-    ): ImportResult<ts.EntityName> | NOIMPORT {
+    ): ImportResult<T> | NOIMPORT {
         const importName = super.importFromStringLiteral(importPath);
         if (importName === null) return this.preimport(importPath);
         return importName;
     }
 }
 
-class StringArrayImporter extends Importer<string[]> {
+class DeclNameImporter extends DeclImporter<ts.EntityName> {
+    makeIdentifier(name: string): ts.EntityName {
+        return this.factory.createIdentifier(name);
+    }
+    makePropertyAccess(left: ts.EntityName, right: string): ts.EntityName {
+        return this.factory.createQualifiedName(left, right);
+    }
+}
+
+class DeclStringImporter extends DeclImporter<string[]> {
     makeIdentifier(name: string): string[] {
         return [name];
     }
     makePropertyAccess(left: string[], right: string): string[] {
         return [...left, right];
-    }
-    importLocal(childModule: BundlerModule): string[] {
-        return this.makePropertyAccess(this.globalVar, childModule.id.varName);
-    }
-    importFromStringLiteral(
-        importPath: ParsedImportPath
-    ): ImportResult<string[]> | NOIMPORT {
-        const importName = super.importFromStringLiteral(importPath);
-        if (importName === null) return this.preimport(importPath);
-        return importName;
     }
 }
