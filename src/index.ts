@@ -1,6 +1,6 @@
 if (!Date.now) Date.now = () => +new Date();
 
-import { Bundler } from "./bundler";
+import { Bundler, BundleResult } from "./bundler";
 import { BundlerMainContext } from "./context";
 import { memcache } from "./memmgr";
 import { CACHE_MEMORY_DEFAULT, memoryCache } from "./module";
@@ -29,12 +29,8 @@ export async function bundle(
         bundlers.push(...ctx.makeBundlersWithPath(p, output));
     }
     for (const bundler of bundlers) {
-        try {
-            await bundler.bundle();
-            bundler.clear();
-        } catch (err) {
-            ctx.reportFromCatch(err);
-        }
+        await bundler.bundle();
+        bundler.clear();
     }
 
     const duration = process.hrtime(started);
@@ -125,13 +121,10 @@ export namespace bundle {
                             reloads.add(bundler.tsconfig);
                             continue;
                         }
-                        try {
-                            await bundler.bundle();
-                        } catch (err) {
-                            ctx.reportFromCatch(err);
-                        }
-                        watcher.reset(bundler, bundler.deplist);
+
+                        const res = await bundler.bundle();
                         bundler.clear();
+                        watcher.reset(bundler, res.deplist);
                     }
 
                     for (const tsconfigPath of reloads) {
@@ -139,13 +132,9 @@ export namespace bundle {
                             tsconfigPath,
                             output
                         )) {
-                            try {
-                                await bundler.bundle();
-                            } catch (err) {
-                                ctx.reportFromCatch(err);
-                            }
-                            const files = bundler.deplist;
-                            watcher.reset(bundler, files);
+                            const res = await bundler.bundle();
+                            bundler.clear();
+                            watcher.reset(bundler, res.deplist);
                         }
                     }
                 }

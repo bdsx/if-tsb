@@ -102,7 +102,7 @@ export function count(content: string, chr: string): number {
     return count;
 }
 
-type Task = (() => Promise<any>) | Promise<void> | null;
+type Task = (() => Promise<any>) | Promise<void> | null | false;
 type TaskToResult<T> = T extends () => Promise<infer R>
     ? R
     : T extends Promise<infer R>
@@ -116,7 +116,7 @@ export function concurrent<PROMS extends Task[]>(
 ): Promise<TasksToResults<PROMS>> {
     const proms: Promise<any>[] = [];
     for (const func of funcs) {
-        if (func === null) continue;
+        if (!func) continue;
         if (func instanceof Promise) {
             proms.push(func);
         } else {

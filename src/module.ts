@@ -435,11 +435,15 @@ export class ParsedImportPath {
     }
 }
 
+export interface ChildModule {
+    module: BundlerModule;
+    importLine: ErrorPosition | null;
+}
+
 export class BundlerModule {
     public readonly id: BundlerModuleId;
     public readonly rpath: string;
-    public readonly children: BundlerModule[] = [];
-    public readonly importLines: (ErrorPosition | null)[] = [];
+    public children: ChildModule[] | null = null;
     public isAppended = false;
     public isEntry = false;
     public checkState = CheckState.None;
@@ -474,10 +478,10 @@ export class BundlerModule {
         return this.error(ErrorPosition.fromNode(node), code, message);
     }
 
-    private async _refine(
+    private _refine(
         sourceMtime: number,
         dtsMtime: number
-    ): Promise<RefinedModule | null> {
+    ): RefinedModule | null {
         if (sourceMtime === -1) {
             this.error(
                 null,
@@ -487,8 +491,7 @@ export class BundlerModule {
             return null;
         }
 
-        this.children.length = 0;
-        this.importLines.length = 0;
+        this.children = null;
 
         const refined = new RefinedModule(this.id);
         let content = `// ${this.rpath}\n`;
@@ -1371,6 +1374,9 @@ export class BundlerModule {
                 contentEnd = lastLineIdx;
             }
             if (this.isEntry) {
+                // ES6 export must be the global scope.
+                // it extracts the entry module to the global scope.
+
                 let exportTarget = "{}";
                 switch (bundler.exportRule) {
                     case ExportRule.Direct:
@@ -1552,9 +1558,7 @@ export class BundlerModule {
         return refined;
     }
 
-    private async _checkExternalChanges(
-        refined: RefinedModule
-    ): Promise<boolean> {
+    private _checkExternalChanges(refined: RefinedModule): boolean {
         for (const imp of refined.imports) {
             if (imp.getExternalMode() !== ExternalMode.NoExternal) continue;
             for (const glob of this.bundler.externals) {
@@ -1574,7 +1578,7 @@ export class BundlerModule {
             refined.errored ||
             (this.needDeclaration && refined.declaration === null) ||
             !refined.checkRelativePath(this.rpath) ||
-            (await this._checkExternalChanges(refined))
+            this._checkExternalChanges(refined)
         ) {
             if (refined !== null) memcache.unuse(refined);
             const startTime = Date.now();
@@ -1588,7 +1592,7 @@ export class BundlerModule {
                 );
             }, 5000);
             try {
-                refined = await this._refine(sourceMtime, dtsMtime);
+                refined = this._refine(sourceMtime, dtsMtime);
             } finally {
                 clearInterval(tooLongTimer);
             }
