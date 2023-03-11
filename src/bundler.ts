@@ -27,11 +27,11 @@ import {
     getScriptKind,
     parsePostfix,
     splitContent,
+    time,
 } from "./util/util";
 import { ValueLock } from "./util/valuelock";
 import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
-import { time } from "console";
 
 const libmap = new Map<string, Bundler>();
 type WritingLock = ValueLock<[WriterStream, WriterStream | null]>;
