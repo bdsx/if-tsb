@@ -169,8 +169,10 @@ export class Bundler {
                 ? new Set(boptions.preimport)
                 : new Set();
         this.noSourceMapWorker = !!boptions.noSourceMapWorker;
-        this.preimportTargets.add("tslib");
-        this.preimportTargets.add("path");
+        if (!this.bundleExternals) {
+            this.preimportTargets.add("tslib");
+            this.preimportTargets.add("path");
+        }
         this.exportLib = !!boptions.exportLib;
         this.declaration = !!tsoptions.declaration;
 
