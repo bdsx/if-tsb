@@ -1458,16 +1458,20 @@ export class BundlerModule {
                         path.dirname(bundler.output),
                         this.id.apath
                     );
+
+                    const prefix = this.isEntry
+                        ? bundler.constKeyword + " "
+                        : ""; // global scope, Identifier '__dirname' has already been declared issue
                     if (useFileName) {
                         if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${bundler.constKeyword} __filename=${
+                        content += `${prefix}__filename=${
                             bundler.globalVarName
                         }.__resolve(${JSON.stringify(rpath)});\n`;
                     }
                     if (useDirName) {
                         rpath = path.dirname(rpath);
                         if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${bundler.constKeyword} __dirname=${
+                        content += `${prefix}__dirname=${
                             bundler.globalVarName
                         }.__resolve(${JSON.stringify(rpath)});\n`;
                     }
