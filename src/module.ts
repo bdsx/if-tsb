@@ -1460,8 +1460,8 @@ export class BundlerModule {
                     );
 
                     const prefix = this.isEntry
-                        ? bundler.constKeyword + " "
-                        : ""; // global scope, Identifier '__dirname' has already been declared issue
+                        ? ""
+                        : bundler.constKeyword + " "; // global scope, Identifier '__dirname' has already been declared issue
                     if (useFileName) {
                         if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
                         content += `${prefix}__filename=${
@@ -1476,22 +1476,26 @@ export class BundlerModule {
                         }.__resolve(${JSON.stringify(rpath)});\n`;
                     }
                 } else {
+                    const prefix = this.isEntry
+                        ? "var "
+                        : bundler.constKeyword + " "; //
+
                     rpath = path.relative(
                         bundler.browserAPathRoot,
                         this.id.apath
                     );
                     if (useFileName) {
                         if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${
-                            bundler.constKeyword
-                        } __filename=${JSON.stringify("/" + rpath)};\n`;
+                        content += `${prefix}__filename=${JSON.stringify(
+                            "/" + rpath
+                        )};\n`;
                     }
                     if (useDirName) {
                         rpath = path.dirname(rpath);
                         if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${
-                            bundler.constKeyword
-                        } __dirname=${JSON.stringify("/" + rpath)};\n`;
+                        content += `${prefix}__dirname=${JSON.stringify(
+                            "/" + rpath
+                        )};\n`;
                     }
                 }
             }
