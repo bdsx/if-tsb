@@ -31,6 +31,7 @@ import {
 import { ValueLock } from "./util/valuelock";
 import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
+import { time } from "console";
 
 const libmap = new Map<string, Bundler>();
 type WritingLock = ValueLock<[WriterStream, WriterStream | null]>;
@@ -350,8 +351,7 @@ export class Bundler {
         this.bundling = true;
         this.clear();
 
-        if (this.verbose)
-            console.log("START " + (this.entryApath || this.basedir));
+        console.log(`[${time()}] bundling ${this.entryApath || this.basedir}`);
 
         const res = new BundleResult();
         try {
@@ -360,7 +360,7 @@ export class Bundler {
             console.error(err);
         }
         if (this.verbose)
-            console.log("FINISH " + (this.entryApath || this.basedir));
+            console.log(`[${time()}] done ${this.entryApath || this.basedir}`);
 
         this.bundling = false;
         return res;
