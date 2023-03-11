@@ -502,6 +502,7 @@ export class BundlerModule {
         let useDirName = false;
         let useFileName = false;
         let useModule = false;
+        let useGlobal = false;
         let useModuleExports = false;
         let useExports = false;
         let exportEquals = false;
@@ -584,6 +585,9 @@ export class BundlerModule {
                                 ) {
                                     useModuleExports = true;
                                 }
+                                break;
+                            case "global":
+                                useGlobal = true;
                                 break;
                             case "exports":
                                 useExports = true;
@@ -1378,6 +1382,11 @@ export class BundlerModule {
                 // it extracts the entry module to the global scope.
 
                 let exportTarget = "{}";
+                if (useGlobal) {
+                    if (bundler.browserAPathRoot !== null) {
+                        content += `${bundler.constKeyword} global=window;`;
+                    }
+                }
                 switch (bundler.exportRule) {
                     case ExportRule.Direct:
                         exportTarget = bundler.exportVarName!;
@@ -1424,17 +1433,9 @@ export class BundlerModule {
             }
 
             if (useFileName || useDirName) {
-                const prefix = this.isEntry ? "" : `${bundler.constKeyword} `;
-                let rpath = path.relative(
-                    path.dirname(bundler.output),
-                    this.id.apath
-                );
-                if (useFileName) {
-                    if (path.sep !== "/")
-                        rpath = rpath.split(path.sep).join("/");
-                    content += `${prefix}__filename=${
-                        bundler.globalVarName
-                    }.__resolve(${JSON.stringify(rpath)});\n`;
+                let rpath: string;
+
+                if (bundler.browserAPathRoot === null) {
                     helper.addExternalList(
                         "path",
                         ExternalMode.Preimport,
@@ -1453,32 +1454,41 @@ export class BundlerModule {
                         null,
                         false
                     );
-                }
-                if (useDirName) {
-                    rpath = path.dirname(rpath);
-                    if (path.sep !== "/")
-                        rpath = rpath.split(path.sep).join("/");
-                    content += `${prefix}__dirname=${
-                        bundler.globalVarName
-                    }.__resolve(${JSON.stringify(rpath)});\n`;
-                    helper.addExternalList(
-                        "path",
-                        ExternalMode.Preimport,
-                        null,
-                        false
+                    rpath = path.relative(
+                        path.dirname(bundler.output),
+                        this.id.apath
                     );
-                    helper.addExternalList(
-                        "__resolve",
-                        ExternalMode.Manual,
-                        null,
-                        false
+                    if (useFileName) {
+                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                        content += `${bundler.constKeyword} __filename=${
+                            bundler.globalVarName
+                        }.__resolve(${JSON.stringify(rpath)});\n`;
+                    }
+                    if (useDirName) {
+                        rpath = path.dirname(rpath);
+                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                        content += `${bundler.constKeyword} __dirname=${
+                            bundler.globalVarName
+                        }.__resolve(${JSON.stringify(rpath)});\n`;
+                    }
+                } else {
+                    rpath = path.relative(
+                        bundler.browserAPathRoot,
+                        this.id.apath
                     );
-                    helper.addExternalList(
-                        "__dirname",
-                        ExternalMode.Manual,
-                        null,
-                        false
-                    );
+                    if (useFileName) {
+                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                        content += `${
+                            bundler.constKeyword
+                        } __filename=${JSON.stringify("/" + rpath)};\n`;
+                    }
+                    if (useDirName) {
+                        rpath = path.dirname(rpath);
+                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                        content += `${
+                            bundler.constKeyword
+                        } __dirname=${JSON.stringify("/" + rpath)};\n`;
+                    }
                 }
             }
             content += stripper.strippedComments;

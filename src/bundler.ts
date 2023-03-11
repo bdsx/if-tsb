@@ -25,23 +25,24 @@ import {
     changeExt,
     concurrent,
     getScriptKind,
+    millisecondFrom,
     parsePostfix,
     splitContent,
     time,
 } from "./util/util";
-import { ValueLock } from "./util/valuelock";
 import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
 
 const libmap = new Map<string, Bundler>();
-type WritingLock = ValueLock<[WriterStream, WriterStream | null]>;
 
 export class BundleResult {
     public readonly deplist: string[] = [];
 }
 
+const reservedModuleNames = ["_", "entry"];
+
 export class Bundler {
-    private readonly names = new NameMap<BundlerModuleId>();
+    private readonly names = new NameMap<BundlerModuleId | null>();
 
     private bundling = false;
 
@@ -54,6 +55,7 @@ export class Bundler {
     public readonly suppressDynamicImportErrors: boolean;
     public readonly faster: boolean;
     public readonly bundleExternals: boolean;
+    public readonly browserAPathRoot: string | null;
     public readonly externals: RegExp[];
     public readonly cacheMemory: number | undefined;
     public readonly exportRule: ExportRule;
@@ -94,6 +96,9 @@ export class Bundler {
         public readonly tsoptions: ts.CompilerOptions,
         public readonly tsconfigContent: TsConfig
     ) {
+        for (const reservedName of reservedModuleNames) {
+            this.names.set(reservedName, null);
+        }
         this.idmap = main.getCacheMap(resolvedOutput);
         if (tsoptions.noEmitOnError === true) {
             main.reportMessage(
@@ -127,7 +132,6 @@ export class Bundler {
             this.inlineSourceMap = false;
         }
 
-        const that = this;
         this.sys = tshelper.createSystem(this.basedir);
 
         this.compilerHost = ts.createCompilerHost(this.tsoptions);
@@ -161,6 +165,16 @@ export class Bundler {
         this.faster = !!boptions.faster;
         this.watchWaiting = boptions.watchWaiting;
         this.bundleExternals = !!boptions.bundleExternals;
+        const browser = boptions.browser;
+        if (browser) {
+            if (typeof browser === "string") {
+                this.browserAPathRoot = this.resolvePath(browser);
+            } else {
+                this.browserAPathRoot = this.resolvePath(".");
+            }
+        } else {
+            this.browserAPathRoot = null;
+        }
         this.externals =
             boptions.externals instanceof Array
                 ? boptions.externals.map((glob) => globToRegExp(glob))
@@ -170,6 +184,9 @@ export class Bundler {
                 ? new Set(boptions.preimport)
                 : new Set();
         this.noSourceMapWorker = !!boptions.noSourceMapWorker;
+        if (this.browserAPathRoot !== null) {
+            this.bundleExternals = true;
+        }
         if (!this.bundleExternals) {
             this.preimportTargets.add("tslib");
             this.preimportTargets.add("path");
@@ -258,9 +275,7 @@ export class Bundler {
             this.basedir
         );
         if (entry !== null) {
-            const apath = path.isAbsolute(entry)
-                ? entry
-                : path.join(this.basedir, entry);
+            const apath = this.resolvePath(entry);
             if (this.exportLib) {
                 this.files.push(apath);
             } else {
@@ -282,6 +297,15 @@ export class Bundler {
             if (this.tsoptions.alwaysStrict) this.useStrict = true;
         } else {
             if (!this.tsoptions.noImplicitUseStrict) this.useStrict = true;
+        }
+        if (this.browserAPathRoot !== null) {
+            if (boptions.bundleExternals !== undefined) {
+                this.main.reportMessage(
+                    IfTsbError.WrongUsage,
+                    "browser=true ignores the bundleExternals option",
+                    true
+                );
+            }
         }
     }
 
@@ -346,12 +370,14 @@ export class Bundler {
         return this.names.delete(name);
     }
 
-    async bundle(): Promise<BundleResult> {
+    async bundle(printOutputTime?: boolean): Promise<BundleResult> {
         if (this.bundling) throw Error("bundler is busy");
         this.bundling = true;
         this.clear();
 
-        console.log(`[${time()}] bundling ${this.entryApath || this.basedir}`);
+        if (this.verbose)
+            console.log(`[${time()}] start ${this.entryApath || this.basedir}`);
+        const started = process.hrtime();
 
         const res = new BundleResult();
         try {
@@ -359,8 +385,13 @@ export class Bundler {
         } catch (err) {
             console.error(err);
         }
-        if (this.verbose)
-            console.log(`[${time()}] done ${this.entryApath || this.basedir}`);
+        if (printOutputTime) {
+            console.log(
+                `[${time()}] output ${this.output} (${millisecondFrom(
+                    started
+                )}ms)`
+            );
+        }
 
         this.bundling = false;
         return res;
@@ -787,26 +818,32 @@ async function bundlingProcess(
             } else {
                 await jsWriter.write(`__resolve:function(rpath){\n`);
             }
-            const path = bundler.idmap.get("path")!;
-            await jsWriter.write(
-                `return this.${path.varName}.join(this.__dirname, rpath);\n},\n`
-            );
-            if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
-                await jsWriter.write(`__dirname,\n`);
+            if (bundler.browserAPathRoot !== null) {
+                await jsWriter.write(`return this.__dirname+'/'+rpath;\n},\n`);
+                await jsWriter.write(`__dirname:location.href,\n`);
             } else {
-                await jsWriter.write(`__dirname:__dirname,\n`);
+                const path = bundler.idmap.get("path")!;
+                await jsWriter.write(
+                    `return this.${path.varName}.join(this.__dirname, rpath);\n},\n`
+                );
+                if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
+                    await jsWriter.write(`__dirname,\n`);
+                } else {
+                    await jsWriter.write(`__dirname:__dirname,\n`);
+                }
             }
             sourceMapLineOffset += 4;
         }
 
-        if (
-            entryModuleIsAccessed ||
-            bundler.tsoptions.target! < ts.ScriptTarget.ES5
-        ) {
-            await jsWriter.write(`entry:exports\n};\n`);
+        if (entryModuleIsAccessed) {
+            await jsWriter.write(`entry:${bundler.exportVarName}\n};\n`);
             sourceMapLineOffset += 2;
         } else {
-            await jsWriter.write(`};\n`);
+            if (bundler.tsoptions.target! < ts.ScriptTarget.ES5) {
+                await jsWriter.write(`_:null\n};\n`);
+            } else {
+                await jsWriter.write(`};\n`);
+            }
             sourceMapLineOffset++;
         }
     });

@@ -1,6 +1,6 @@
 if (!Date.now) Date.now = () => +new Date();
 
-import { Bundler, BundleResult } from "./bundler";
+import { Bundler } from "./bundler";
 import { BundlerMainContext } from "./context";
 import { memcache } from "./memmgr";
 import { CACHE_MEMORY_DEFAULT, memoryCache } from "./module";
@@ -10,7 +10,7 @@ import { cacheDir } from "./util/cachedir";
 import { cachedStat } from "./util/cachedstat";
 import { fsp } from "./util/fsp";
 import { namelock } from "./util/namelock";
-import { resolved, time } from "./util/util";
+import { millisecondFrom, resolved, time } from "./util/util";
 import { FilesWatcher } from "./util/watch";
 import fs = require("fs");
 import path = require("path");
@@ -28,8 +28,9 @@ export async function bundle(
     for (const p of entries) {
         bundlers.push(...ctx.makeBundlersWithPath(p, output));
     }
+    const printTimePerOutput = bundlers.length > 1;
     for (const bundler of bundlers) {
-        await bundler.bundle();
+        await bundler.bundle(printTimePerOutput);
         bundler.clear();
     }
 
@@ -102,6 +103,8 @@ export namespace bundle {
                 return;
             }
 
+            const printTimePerOutput = bundlers.length > 1;
+
             async function bundle(infos: [Bundler, string[]][]): Promise<void> {
                 const started = process.hrtime();
                 watcher.pause();
@@ -122,7 +125,7 @@ export namespace bundle {
                             continue;
                         }
 
-                        const res = await bundler.bundle();
+                        const res = await bundler.bundle(printTimePerOutput);
                         bundler.clear();
                         watcher.reset(bundler, res.deplist);
                     }
@@ -132,7 +135,9 @@ export namespace bundle {
                             tsconfigPath,
                             output
                         )) {
-                            const res = await bundler.bundle();
+                            const res = await bundler.bundle(
+                                printTimePerOutput
+                            );
                             bundler.clear();
                             watcher.reset(bundler, res.deplist);
                         }
@@ -142,13 +147,7 @@ export namespace bundle {
                 console.log(
                     `[${time()}] ${ctx.getErrorCountString()}. Watching for file changes.`
                 );
-                const duration = process.hrtime(started);
-                console.log(
-                    `[${time()}] ${(
-                        duration[0] * 1000 +
-                        duration[1] / 1000000
-                    ).toFixed(6)}ms`
-                );
+                console.log(`[${time()}] ${millisecondFrom(started)}ms`);
                 cachedStat.clear();
 
                 ctx.errorCount = 0;

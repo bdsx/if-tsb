@@ -10,6 +10,7 @@ export interface BundlerOptions {
     watchWaiting?: number;
     globalModuleVarName?: string;
     bundleExternals?: boolean;
+    browser?: boolean;
     externals?: string[];
     cacheMemory?: number | string;
     module?: string;

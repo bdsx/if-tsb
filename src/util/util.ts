@@ -92,6 +92,12 @@ export function time(): string {
     return new Date().toLocaleTimeString();
 }
 
+export function millisecondFrom(startTime: [number, number]): string {
+    const duration = process.hrtime(startTime);
+    const dura = duration[0] * 1000 + duration[1] / 1000000;
+    return dura.toFixed(6);
+}
+
 export function count(content: string, chr: string): number {
     const code = chr.charCodeAt(0);
     const n = content.length;
