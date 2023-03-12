@@ -32,7 +32,8 @@ function renew(node: Node, cacheTimeout: number): void {
     }
 }
 
-function attach(node: Node): void {
+function addToKeepList(node: Node): void {
+    if (node._ref !== 0) throw Error("using but keeped");
     const last = axis._prev!;
     last._next = node;
     node._prev = last;
@@ -46,8 +47,8 @@ function attach(node: Node): void {
     }
 }
 
-function detach(node: Node): void {
-    memcache.usage -= node.size;
+function deleteFromKeepList(node: Node): void {
+    memcacheUsage -= node.size;
 
     const next = node._next!;
     const prev = node._prev!;
@@ -59,13 +60,10 @@ function detach(node: Node): void {
     delete node._cacheTimer;
 }
 
-function reduce(): boolean {
+function reduceKeepList(): boolean {
     const node = axis._next!;
     if (node === axis) return false;
-    if (node._map !== undefined) {
-        node._map.delete(node._key!);
-    }
-    memcache.truncate(node);
+    deleteNow(node);
     if (memcache.verbose) console.log("[memcache] reducing...");
     return true;
 }
@@ -80,7 +78,7 @@ function pollTimer(): void {
         }
         const remained = front._cacheTimer! - now;
         if (remained <= 0) {
-            reduce();
+            reduceKeepList();
             continue;
         }
         timer = setTimeout(pollTimer, remained + 1);
@@ -91,57 +89,54 @@ function pollTimer(): void {
 
 const ESMap = Map;
 
+let memcacheUsage = 0;
+function deleteNow(item: Node): void {
+    if (item._ref === undefined) throw Error(`non registered cache item`);
+    if (item._ref !== 0) throw Error(`using but deleted`);
+    deleteFromKeepList(item);
+    item._map!.delete(item._key!);
+    delete item._key;
+    delete item._map;
+    delete item._ref;
+    item.clear();
+}
+
 export namespace memcache {
     export let verbose = false;
     export let maximum = 1024 * 1024 * 1024;
-    export let usage = 0;
     export let cacheTimeout = 20 * 60 * 1000;
 
-    export function isRegistered(item: Node): boolean {
-        return item._ref != null;
-    }
     export function release(item: Node): void {
-        if (item._ref == null) return; // if unused item
-        item._ref!--;
+        if (item._ref === undefined) throw Error(`non registered cache item`);
+        item._ref--;
         if (item._ref === 0) {
-            if (item.size > memcache.maximum) {
+            if (item._key === undefined) {
+                // expired item
+                delete item._ref;
                 item.clear();
-                return;
+            } else {
+                if (item.size > memcache.maximum) {
+                    item.clear();
+                    return;
+                }
+                memcacheUsage += item.size;
+                while (memcacheUsage > memcache.maximum) {
+                    reduceKeepList();
+                }
+                addToKeepList(item);
             }
-            memcache.usage += item.size;
-            while (memcache.usage > memcache.maximum) {
-                reduce();
-            }
-            attach(item);
         }
     }
-    export function ref(item: Node): void {
-        if (item._ref == null) throw Error(`non registered cache item`);
-        if (item._ref === 0) {
-            detach(item);
-        }
-        item._ref!++;
-    }
-    export function unuse(item: Node): void {
-        if (item._ref == null) throw Error(`non registered cache item`);
-        if (item._ref === 0) {
-            detach(item);
-        }
+    export function expire(item: Node): void {
+        if (item._ref === undefined) throw Error(`non registered cache item`);
         item._map!.delete(item._key!);
         delete item._key;
         delete item._map;
-        delete item._ref;
-        item.clear();
-    }
-    export function truncate(item: Node): void {
-        if (item._ref == null) throw Error(`non registered cache item`);
-        if (item._ref !== 0) return;
-        detach(item);
-        item._map!.delete(item._key!);
-        delete item._key;
-        delete item._map;
-        delete item._ref;
-        item.clear();
+        if (item._ref === 0) {
+            delete item._ref;
+            deleteFromKeepList(item);
+            item.clear();
+        }
     }
 
     export class Map<K extends keyof any, V extends Node> {
@@ -149,7 +144,8 @@ export namespace memcache {
 
         register(key: K, node: V): void {
             if (node.size > memcache.maximum) return;
-            if (node._ref != null) throw Error(`already registered cache item`);
+            if (node._ref !== undefined)
+                throw Error(`already registered cache item`);
             node._ref = 1;
             node._key = key;
             this.map.set(key, node);
@@ -158,7 +154,7 @@ export namespace memcache {
 
         takeOrCreate(key: K, creator: () => V): V {
             let node = this.take(key);
-            if (node == null) {
+            if (node === undefined) {
                 node = creator();
                 this.register(key, node);
             }
@@ -167,17 +163,22 @@ export namespace memcache {
 
         take(key: K): V | undefined {
             const node = this.map.get(key);
-            if (node != null) {
-                ref(node);
+            if (node !== undefined) {
+                if (node._ref === undefined)
+                    throw Error(`non registered cache node`);
+                if (node._ref === 0) {
+                    deleteFromKeepList(node);
+                }
+                node._ref!++;
             }
             return node;
         }
 
         clear(): void {
             for (const item of this.map.values()) {
-                memcache.usage -= item.size;
+                memcacheUsage -= item.size;
                 release(item);
-                truncate(item);
+                if (item._ref === 0) deleteNow(item);
             }
             this.map.clear();
         }

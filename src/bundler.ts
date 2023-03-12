@@ -618,7 +618,7 @@ async function bundlingProcess(
         if (refined.globalDeclaration !== null) {
             globalDeclarationModules.push(refined.globalDeclaration);
         }
-        memcache.release(entryRefined!);
+        memcache.release(refined);
     }
 
     const deplist = new DepList();

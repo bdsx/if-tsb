@@ -296,15 +296,15 @@ export class RefinedModule {
                 sourceMtime = srcmtime;
                 dtsMtime = dtsmtime;
                 if (cached.sourceMtime !== sourceMtime) {
-                    memcache.unuse(cached);
+                    memcache.expire(cached);
                     break _error;
                 }
                 if (dtsMtime !== -1 && cached.dtsMtime !== dtsMtime) {
-                    memcache.unuse(cached);
+                    memcache.expire(cached);
                     break _error;
                 }
                 if (cached.tsconfigMtime !== bundler.tsconfigMtime) {
-                    memcache.unuse(cached);
+                    memcache.expire(cached);
                     break _error;
                 }
                 return { refined: cached, sourceMtime, dtsMtime };
@@ -524,7 +524,7 @@ export class BundlerModule {
             let data = bundler.sourceFileCache.take(fileName);
             refs.push(data);
             if (data.isModifiedSync()) {
-                memcache.unuse(data);
+                memcache.expire(data);
                 data = bundler.sourceFileCache.take(fileName);
             }
             return data.sourceFile;
@@ -1598,7 +1598,7 @@ export class BundlerModule {
             !refined.checkRelativePath(this.rpath) ||
             this._checkExternalChanges(refined)
         ) {
-            if (refined !== null) memcache.unuse(refined);
+            if (refined !== null) memcache.expire(refined);
             const startTime = Date.now();
             const tooLongTimer = setInterval(() => {
                 this.bundler.main.reportMessage(
