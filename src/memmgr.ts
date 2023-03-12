@@ -62,7 +62,9 @@ function detach(node: Node): void {
 function reduce(): boolean {
     const node = axis._next!;
     if (node === axis) return false;
-    node._map!.delete(node._key!);
+    if (node._map !== undefined) {
+        node._map.delete(node._key!);
+    }
     memcache.truncate(node);
     if (memcache.verbose) console.log("[memcache] reducing...");
     return true;
