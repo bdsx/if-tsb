@@ -55,6 +55,7 @@ export class Bundler {
     public readonly suppressDynamicImportErrors: boolean;
     public readonly faster: boolean;
     public readonly bundleExternals: boolean;
+    public readonly browser: boolean;
     public readonly browserAPathRoot: string | null;
     public readonly externals: RegExp[];
     public readonly cacheMemory: number | undefined;
@@ -167,12 +168,14 @@ export class Bundler {
         this.bundleExternals = !!boptions.bundleExternals;
         const browser = boptions.browser;
         if (browser) {
+            this.browser = true;
             if (typeof browser === "string") {
                 this.browserAPathRoot = this.resolvePath(browser);
             } else {
                 this.browserAPathRoot = this.resolvePath(".");
             }
         } else {
+            this.browser = false;
             this.browserAPathRoot = null;
         }
         this.externals =

@@ -1870,7 +1870,7 @@ class MakeTool {
             this.bundler.moduleResolutionCache
         );
         const res = helper.resolve(this.module.id.apath, importPath.importName);
-        if (res.isBuiltIn) return PREIMPORT;
+        if (res.isBuiltIn && !this.bundler.browser) return PREIMPORT;
         if (res.isExternal) {
             if (!this.bundler.bundleExternals) return null;
             if (res.fileNotFound) {
