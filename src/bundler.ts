@@ -207,6 +207,9 @@ export class Bundler {
                 case "none":
                     this.exportRule = ExportRule.None;
                     break;
+                case "private":
+                    this.exportRule = ExportRule.Private;
+                    break;
                 case "commonjs":
                     this.exportRule = ExportRule.CommonJS;
                     break;
@@ -270,6 +273,7 @@ export class Bundler {
             }
         } else {
             this.needWrap =
+                this.exportRule === ExportRule.Private ||
                 this.exportRule === ExportRule.Direct ||
                 this.exportRule === ExportRule.Var;
         }
@@ -726,6 +730,8 @@ async function bundlingProcess(
                     let assign = "";
                     if (bundler.exportRule === ExportRule.Var) {
                         assign = `${bundler.exportVarKeyword} ${bundler.exportVarName}=`;
+                    } else if (bundler.exportRule === ExportRule.Direct) {
+                        // exports = target; for entry
                     }
                     if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
                         await jsWriter.write(`${assign}(()=>{\n`);

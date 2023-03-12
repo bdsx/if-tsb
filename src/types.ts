@@ -26,6 +26,7 @@ export enum ExportRule {
     ES2015,
     Var,
     Direct,
+    Private,
 }
 
 export enum IfTsbError {
