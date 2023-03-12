@@ -39,7 +39,7 @@ export class BundleResult {
     public readonly deplist: string[] = [];
 }
 
-const reservedModuleNames = ["_", "entry"];
+const reservedModuleNames = ["_", "entry", "require"];
 
 export class Bundler {
     private readonly names = new NameMap<BundlerModuleId | null>();
