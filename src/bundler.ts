@@ -641,7 +641,7 @@ async function bundlingProcess(
                     `Cannot find module '${module.mpath}'. refine failed.`
                 );
                 await jsWriter.write(
-                    `${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); }\n`
+                    `${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); },\n`
                 );
             } else {
                 await writeAndRelease(module, refined);
