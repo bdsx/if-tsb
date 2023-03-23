@@ -95,7 +95,7 @@ export class Bundler {
         public readonly files: string[],
         public readonly tsconfig: string | null,
         public readonly tsoptions: ts.CompilerOptions,
-        public readonly tsconfigContent: TsConfig
+        public readonly tsconfigOriginal: any
     ) {
         for (const reservedName of reservedModuleNames) {
             this.names.set(reservedName, null);

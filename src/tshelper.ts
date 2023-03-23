@@ -339,6 +339,7 @@ export namespace tshelper {
         public basedir: string = "";
         public tsconfigPath: string | null = null;
         public compilerOptions: ts.CompilerOptions;
+        public original: any;
 
         constructor() {}
 
@@ -429,6 +430,7 @@ export namespace tshelper {
                 }
                 options.tsconfigPath = configPath;
                 options.compilerOptions = parsed.options;
+                options.original = configFile.config;
             } else {
                 options.entry = configPath;
             }

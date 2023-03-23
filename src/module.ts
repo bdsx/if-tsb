@@ -713,7 +713,7 @@ export class BundlerModule {
                                     if (!moduleReloaderRegistered) {
                                         moduleReloaderRegistered = true;
                                         registerModuleReloader(
-                                            that.bundler.tsconfigContent
+                                            that.bundler.tsconfigOriginal
                                                 .compilerOptions
                                         );
                                     }

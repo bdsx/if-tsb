@@ -363,7 +363,7 @@ export class BundlerMainContext {
                     [],
                     options.tsconfigPath,
                     compilerOptions,
-                    options
+                    options.original
                 );
                 bundlers.push(bundler);
                 const cache = this.idmap.get(bundler.output)!;
