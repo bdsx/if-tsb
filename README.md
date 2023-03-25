@@ -87,15 +87,17 @@ if-tab --clear-cache # clear cache
     "entry": {
         "./entry.ts": {
             "output": "./bundled.output.js",
-            /* ...bundlerOptions */
+            /** "bundlerOptions": { ... }, */
+            /** "compilerOptions": { ... } */
         },
         "./entry2.ts": {
             "output": "./bundled.output2.js",
-            /* ...bundlerOptions */
+            /** "bundlerOptions": { ... }, */
+            /** "compilerOptions": { ... } */
         }
     },
     "bundlerOptions": {
-        /* ...bundlerOptions */
+        /* ... */
     },
     "compilerOptions": {
         /* ... */

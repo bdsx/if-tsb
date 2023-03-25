@@ -39,17 +39,16 @@ export enum IfTsbError {
     ModuleNotFound = 2307,
 }
 
-export interface BundlerOptionsWithOutput extends BundlerOptions {
-    output?: string;
+export interface OutputOptions {
+    output: string;
+    bundlerOptions?: BundlerOptions;
+    compilerOptions?: ts.CompilerOptions;
 }
 
 export interface TsConfig extends tshelper.TsConfigJson {
     exclude?: string[];
     include?: string[];
-    entry?:
-        | string[]
-        | Record<string, string | BundlerOptionsWithOutput>
-        | string;
+    entry?: string[] | Record<string, string | OutputOptions> | string;
     output?: string | null;
 
     bundlerOptions?: BundlerOptions;

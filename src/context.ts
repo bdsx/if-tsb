@@ -5,7 +5,7 @@ import * as ts from "typescript";
 import { Bundler } from "./bundler";
 import { BundlerModule, BundlerModuleId } from "./module";
 import { tshelper } from "./tshelper";
-import { BundlerOptionsWithOutput, IfTsbError, TsConfig } from "./types";
+import { OutputOptions, IfTsbError, TsConfig } from "./types";
 import {
     cacheDir,
     cacheMapPath,
@@ -315,7 +315,7 @@ export class BundlerMainContext {
         }
 
         let entry:
-            | Record<string, string | BundlerOptionsWithOutput>
+            | Record<string, string | OutputOptions>
             | string
             | null
             | undefined = options.entry;
@@ -340,12 +340,17 @@ export class BundlerMainContext {
                 newoptions = Object.assign({}, newoptions);
                 newoptions.bundlerOptions = Object.assign(
                     {},
-                    output,
-                    newoptions.bundlerOptions
+                    newoptions.bundlerOptions,
+                    output.bundlerOptions
+                );
+                newoptions.compilerOptions = Object.assign(
+                    {},
+                    newoptions.compilerOptions,
+                    output.compilerOptions
                 );
                 output = getOutFileName(newoptions, entryfile);
             }
-            const resolvedOutput = path.resolve(options.basedir, output);
+            const resolvedOutput = path.resolve(newoptions.basedir, output);
             if (this.outputs.has(resolvedOutput)) {
                 this.reportMessage(
                     IfTsbError.Dupplicated,
@@ -356,14 +361,14 @@ export class BundlerMainContext {
             try {
                 const bundler = new Bundler(
                     this,
-                    options.basedir,
+                    newoptions.basedir,
                     resolvedOutput,
                     newoptions,
                     entryfile,
                     [],
-                    options.tsconfigPath,
+                    newoptions.tsconfigPath,
                     compilerOptions,
-                    options.original
+                    newoptions.original
                 );
                 bundlers.push(bundler);
                 const cache = this.idmap.get(bundler.output)!;
