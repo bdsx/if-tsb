@@ -40,12 +40,12 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "karikera.github.io",
+            "name": "beta.contest.systems",
             "skipFiles": [
                 "<node_internals>/**"
             ],
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../karikera.github.io", "-w"],
+            "args": ["${workspaceFolder}\\src\\cli.ts", "../beta.contest.systems", "-w"],
             "console": "integratedTerminal"
         }
     ]

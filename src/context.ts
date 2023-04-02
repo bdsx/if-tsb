@@ -337,15 +337,15 @@ export class BundlerMainContext {
             let output = entry[entryfile];
             let newoptions = options;
             if (typeof output === "object") {
-                newoptions = Object.assign({}, newoptions);
+                newoptions = Object.assign({}, newoptions, output);
                 newoptions.bundlerOptions = Object.assign(
                     {},
-                    newoptions.bundlerOptions,
+                    options.bundlerOptions,
                     output.bundlerOptions
                 );
                 newoptions.compilerOptions = Object.assign(
                     {},
-                    newoptions.compilerOptions,
+                    options.compilerOptions,
                     output.compilerOptions
                 );
                 output = getOutFileName(newoptions, entryfile);
