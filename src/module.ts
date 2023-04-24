@@ -560,15 +560,20 @@ export class BundlerModule {
                     case ts.SyntaxKind.Identifier: {
                         const node = _node as ts.Identifier;
                         const parent = helper.getParentNode();
-                        let right: ts.MemberName | null = null;
-                        if (
-                            parent != null &&
-                            parent.kind ===
-                                ts.SyntaxKind.PropertyAccessExpression
-                        ) {
-                            right = (parent as ts.PropertyAccessExpression)
-                                .name;
-                            if (right === node) break;
+                        let right: string | null = null;
+                        if (parent != null) {
+                            if (ts.isPropertyAccessExpression(parent)) {
+                                const rightNode = parent.name;
+                                if (rightNode === node) break;
+                                if (ts.isIdentifier(rightNode)) {
+                                    right = rightNode.text;
+                                }
+                            } else if (ts.isElementAccessExpression(parent)) {
+                                const arg = parent.argumentExpression;
+                                if (ts.isStringLiteral(arg)) {
+                                    right = arg.text;
+                                }
+                            }
                         }
                         switch (node.text) {
                             case "__dirname":
@@ -579,10 +584,7 @@ export class BundlerModule {
                                 break;
                             case "module":
                                 useModule = true;
-                                if (
-                                    right !== null &&
-                                    tshelper.nameEquals(right, "exports")
-                                ) {
+                                if (right === "exports") {
                                     useModuleExports = true;
                                 }
                                 break;
