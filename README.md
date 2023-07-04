@@ -68,7 +68,7 @@ if-tab --clear-cache # clear cache
         "faster": false, // skip external parsing and reporting, cannot emit some d.ts and will not replace enum const
         "watchWaiting": 30, // bundling after ${watchWaiting}ms from file modifying
         "verbose": false,
-        "bundleExternals": false, // bundle files in node_modules
+        "bundleExternals": false, // boolean|string[], bundle files in node_modules
         "browser": false, // boolean|"./path/to/web/root"
         "externals": [], // files that do not bundle
         "cacheMemory": "1MB", // cache memory for watching

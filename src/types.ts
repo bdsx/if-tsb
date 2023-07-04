@@ -9,7 +9,7 @@ export interface BundlerOptions {
     faster?: boolean;
     watchWaiting?: number;
     globalModuleVarName?: string;
-    bundleExternals?: boolean;
+    bundleExternals?: boolean | string[];
     browser?: boolean;
     externals?: string[];
     cacheMemory?: number | string;

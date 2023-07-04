@@ -396,3 +396,16 @@ export function joinModulePath(...pathes: string[]): string {
     if (out.length === 0) return outstr.substr(0, outstr.length - 1);
     else return outstr + out.join("/");
 }
+
+export function* getParents(path: string): IterableIterator<string> {
+    let idx = path.length - 1;
+    yield path;
+    for (;;) {
+        const a = path.lastIndexOf("/", idx);
+        const b = path.lastIndexOf("\\", idx);
+        const max = a > b ? a : b;
+        if (max === -1) return;
+        yield path.substring(0, max);
+        idx = max - 1;
+    }
+}

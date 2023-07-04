@@ -4,7 +4,6 @@ import type { Bundler } from "./bundler";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
 import { SourceFileData } from "./sourcemap/sourcefilecache";
-import { WriterStream } from "./util/streamwriter";
 import { tshelper } from "./tshelper";
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
 import { CACHE_SIGNATURE, getCacheFilePath } from "./util/cachedir";
@@ -14,13 +13,14 @@ import { fsp } from "./util/fsp";
 import { ImportHelper } from "./util/importhelper";
 import { LineStripper } from "./util/linestripper";
 import { namelock } from "./util/namelock";
+import { WriterStream } from "./util/streamwriter";
 import {
+    ScriptKind,
+    SkipableTaskQueue,
     count,
     dirnameModulePath,
     getScriptKind,
     joinModulePath,
-    ScriptKind,
-    SkipableTaskQueue,
 } from "./util/util";
 export const CACHE_MEMORY_DEFAULT = 1024 * 1024 * 1024;
 memcache.maximum = CACHE_MEMORY_DEFAULT;
@@ -429,8 +429,7 @@ export class ParsedImportPath {
 
     isExternalModule(): boolean {
         if (this.importName.startsWith(".")) return false;
-        if (tshelper.builtin.has(this.mpath)) return true;
-        if (this.helper.bundler.bundleExternals) return false;
+        if (this.helper.bundler.isBundlable(this.mpath)) return false;
         return true;
     }
 }
@@ -1876,7 +1875,7 @@ class MakeTool {
             return this.bundler.browser ? null : PREIMPORT;
         }
         if (res.isExternal) {
-            if (!this.bundler.bundleExternals) return null;
+            if (!this.bundler.isBundlable(importPath.mpath)) return null;
             if (res.fileNotFound) {
                 this.helper.importError(importPath.importName);
                 return null;
@@ -1916,7 +1915,7 @@ class MakeTool {
         declNode: ts.Declaration,
         outerModulePath: ParsedImportPath | null
     ): ts.Node {
-        let outerModuleAPath: string | null;
+        let outerModuleAPath: string | null = null;
         if (outerModulePath !== null) {
             if (!outerModulePath.isExternalModule()) {
                 outerModuleAPath = outerModulePath.getAbsolutePath();

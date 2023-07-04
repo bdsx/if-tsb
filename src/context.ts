@@ -5,11 +5,11 @@ import * as ts from "typescript";
 import { Bundler } from "./bundler";
 import { BundlerModule, BundlerModuleId } from "./module";
 import { tshelper } from "./tshelper";
-import { OutputOptions, IfTsbError, TsConfig } from "./types";
+import { IfTsbError, TsConfig } from "./types";
 import {
+    CACHE_VERSION,
     cacheDir,
     cacheMapPath,
-    CACHE_VERSION,
     getCacheFilePath,
 } from "./util/cachedir";
 import { fsp } from "./util/fsp";
@@ -314,11 +314,8 @@ export class BundlerMainContext {
             compilerOptions.module = ts.ModuleKind.CommonJS;
         }
 
-        let entry:
-            | Record<string, string | OutputOptions>
-            | string
-            | null
-            | undefined = options.entry;
+        let entry: null | string | Array<unknown> | Record<string, any> =
+            options.entry;
         if (entry == null) {
             const name = "./index.ts";
             entry = { [name]: getOutFileName(options, name) };
@@ -326,15 +323,19 @@ export class BundlerMainContext {
             entry = { [entry]: getOutFileName(options, entry) };
         } else if (entry instanceof Array) {
             const out: Record<string, string> = {};
-            for (const filepath of entry) {
-                out[filepath] = getOutFileName(options, filepath);
+            for (let filepath of entry) {
+                const filepathstr = String(filepath);
+                out[filepathstr] = getOutFileName(options, filepathstr);
             }
             entry = out;
+        } else if (typeof entry !== "object") {
+            tshelper.reportMessage(IfTsbError.WrongUsage, "Invalid entry type");
+            return [];
         }
 
         const bundlers: Bundler[] = [];
         for (const entryfile in entry) {
-            let output = entry[entryfile];
+            let output: string | Record<string, unknown> = entry[entryfile];
             let newoptions = options;
             if (typeof output === "object") {
                 newoptions = Object.assign({}, newoptions, output);
@@ -349,6 +350,8 @@ export class BundlerMainContext {
                     output.compilerOptions
                 );
                 output = getOutFileName(newoptions, entryfile);
+            } else {
+                output = String(output);
             }
             const resolvedOutput = path.resolve(newoptions.basedir, output);
             if (this.outputs.has(resolvedOutput)) {

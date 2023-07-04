@@ -4,17 +4,21 @@
         "./src/index.ts": "./index.bundle.js",
         "./src/sourcemap/sourcemap-worker.ts": "./worker.bundle.js",
         "./src/ts-worker.ts": "./tsworker.bundle.js",
-        "./sample/index.ts": "./sample/index.bundle.js"
+        "./sample/index.ts": {
+            "output": "./sample/index.bundle.js",
+            "bundlerOptions": {
+                "bundleExternals": ["arg"]
+            }
+        }
     },
     "bundlerOptions": {
         "verbose": true,
         "noSourceMapWorker": true
     },
     "compilerOptions": {
-        "typeRoots": [ "sample/types" ],
-        "types": [ "node" ],
+        "typeRoots": ["sample/types"],
         "target": "ES2015",
-        "lib": [ "ES2015" ],
+        "lib": ["ES2015"],
         "module": "CommonJS",
         "moduleResolution": "Node",
         "noImplicitAny": true,
@@ -25,7 +29,7 @@
         "sourceMap": true,
         "importHelpers": true,
         "paths": {
-          "bdsx/*": ["./bdsx/*"]
-       }
+            "bdsx/*": ["./bdsx/*"]
+        }
     }
 }

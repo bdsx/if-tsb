@@ -24,6 +24,7 @@ import { WriterStream } from "./util/streamwriter";
 import {
     changeExt,
     concurrent,
+    getParents,
     getScriptKind,
     millisecondFrom,
     parsePostfix,
@@ -54,7 +55,7 @@ export class Bundler {
     public readonly checkCircularDependency: boolean;
     public readonly suppressDynamicImportErrors: boolean;
     public readonly faster: boolean;
-    public readonly bundleExternals: boolean;
+    public readonly bundleExternals: boolean | Set<string>;
     public readonly browser: boolean;
     public readonly browserAPathRoot: string | null;
     public readonly externals: RegExp[];
@@ -165,7 +166,15 @@ export class Bundler {
             !!boptions.suppressDynamicImportErrors;
         this.faster = !!boptions.faster;
         this.watchWaiting = boptions.watchWaiting;
-        this.bundleExternals = !!boptions.bundleExternals;
+        if (boptions.bundleExternals instanceof Array) {
+            const bundleList = boptions.bundleExternals;
+            for (let i = 0; i < bundleList.length; i++) {
+                bundleList[i] = String(bundleList[i]);
+            }
+            this.bundleExternals = new Set(bundleList);
+        } else {
+            this.bundleExternals = !!boptions.bundleExternals;
+        }
         const browser = boptions.browser;
         if (browser) {
             this.browser = true;
@@ -432,6 +441,19 @@ export class Bundler {
             m.clear();
         }
         libmap.clear();
+    }
+
+    isBundlable(mpath: string): boolean {
+        if (mpath.startsWith(".")) return true;
+        if (tshelper.builtin.has(mpath)) return false;
+        if (this.bundleExternals instanceof Set) {
+            for (const dir of getParents(mpath)) {
+                if (this.bundleExternals.has(dir)) return true;
+            }
+        } else {
+            if (this.bundleExternals) return true;
+        }
+        return false;
     }
 }
 

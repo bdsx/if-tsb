@@ -1,4 +1,3 @@
-import path = require("path");
 import ts = require("typescript");
 import { tshelper } from "../tshelper";
 import { cachedStat } from "./cachedstat";
