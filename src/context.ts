@@ -370,7 +370,7 @@ export class BundlerMainContext {
                     entryfile,
                     [],
                     newoptions.tsconfigPath,
-                    compilerOptions,
+                    newoptions.compilerOptions,
                     newoptions.original
                 );
                 bundlers.push(bundler);

@@ -24,6 +24,7 @@ import { WriterStream } from "./util/streamwriter";
 import {
     changeExt,
     concurrent,
+    count,
     getParents,
     getScriptKind,
     millisecondFrom,
@@ -83,6 +84,8 @@ export class Bundler {
     public readonly sourceFileCache: SourceFileCache;
     public readonly entryApath: string | null = null;
     public readonly inlineSourceMap: boolean;
+    public readonly wrapBegin: string | null;
+    public readonly wrapEnd: string | null;
     private readonly moduleByName = new Map<string, BundlerModule>();
 
     public program: ts.Program | undefined;
@@ -205,6 +208,10 @@ export class Bundler {
         }
         this.exportLib = !!boptions.exportLib;
         this.declaration = !!tsoptions.declaration;
+        this.wrapBegin =
+            boptions.wrapBegin != null ? String(boptions.wrapBegin) : null;
+        this.wrapEnd =
+            boptions.wrapEnd != null ? String(boptions.wrapEnd) : null;
 
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
         this.sourceFileCache = SourceFileCache.getInstance(tsoptions.target!);
@@ -715,6 +722,12 @@ async function bundlingProcess(
         : null;
     await concurrent(
         async () => {
+            if (bundler.wrapBegin !== null) {
+                const lineCount = count(bundler.wrapBegin, "\n");
+                sourceMapLineOffset += lineCount;
+                await jsWriter.write(bundler.wrapBegin);
+            }
+
             const firstLineComment =
                 entryRefined && entryRefined.firstLineComment;
             if (firstLineComment !== null) {
@@ -881,7 +894,7 @@ async function bundlingProcess(
 
     // end with the entry module for es6 module
     if (entryModule !== null) {
-        writeAndRelease(entryModule, entryRefined!);
+        await writeAndRelease(entryModule, entryRefined!);
     }
 
     checkDeps();
@@ -963,6 +976,11 @@ async function bundlingProcess(
         }
     } else {
         await writingJs;
+    }
+    if (bundler.wrapEnd !== null) {
+        const lineCount = count(bundler.wrapEnd, "\n");
+        sourceMapLineOffset += lineCount;
+        await jsWriter.write(bundler.wrapEnd);
     }
     await jsWriter.end();
     if (dtsWriter !== null) {

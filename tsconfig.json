@@ -1,13 +1,20 @@
 {
     "entry": {
         "./src/cli.ts": "./cli.bundle.js",
-        "./src/index.ts": "./index.bundle.js",
+        "./src/index.ts": {
+            "output": "./index.bundle.js",
+            "compilerOptions": {
+                "declaration": true
+            }
+        },
         "./src/sourcemap/sourcemap-worker.ts": "./worker.bundle.js",
         "./src/ts-worker.ts": "./tsworker.bundle.js",
         "./sample/index.ts": {
             "output": "./sample/index.bundle.js",
             "bundlerOptions": {
-                "bundleExternals": ["arg"]
+                "bundleExternals": ["arg"],
+                "wrapBegin": "//test - begin\n",
+                "wrapEnd": "\n//test - end\n"
             }
         }
     },
@@ -25,7 +32,7 @@
         "strictNullChecks": true,
         "noImplicitThis": true,
         "resolveJsonModule": true,
-        "declaration": true,
+        "declaration": false,
         "sourceMap": true,
         "importHelpers": true,
         "paths": {

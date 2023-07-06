@@ -18,6 +18,8 @@ export interface BundlerOptions {
     concurrency?: number;
     exportLib?: boolean;
     noSourceMapWorker?: boolean;
+    wrapBegin?: string;
+    wrapEnd?: string;
 }
 
 export enum ExportRule {

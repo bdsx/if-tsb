@@ -1,5 +1,6 @@
 ## if-tsb: Insanely Fast TypeScript Bundler
-if-tsb is the bundler for TypeScript.  
+
+if-tsb is the bundler for TypeScript.
 
 ```sh
 npm i -g if-tsb # install
@@ -12,10 +13,10 @@ if-tsb -w # build with watch
 if-tab --clear-cache # clear cache
 ```
 
-
 ### tsconfig.json
 
-* define a entry  
+-   define a entry
+
 ```js
 {
     "entry": "./entry.ts", // output: "./entry.bundle.js"
@@ -24,7 +25,9 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* define multiple entries  
+
+-   define multiple entries
+
 ```js
 {
     "entry": ["./entry.ts", "./entry2.ts"], // output: "./entry.bundle.js", "./entry2.bundle.js"
@@ -33,7 +36,9 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* define entries with specific output  
+
+-   define entries with specific output
+
 ```js
 {
     "entry": {
@@ -45,7 +50,9 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* define entries with specific output alternate  
+
+-   define entries with specific output alternate
+
 ```js
 {
     "entry": ["./entry.ts", "./entry2.ts"],
@@ -55,15 +62,17 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* all default options
+
+-   all default options
+
 ```js
 {
     "entry": "./index.ts",
     "output": "[dirname]/[name].bundled.js",
     "bundlerOptions": {
         "globalModuleVarName": "__tsb",
-        "checkCircularDependency": false, 
-        "suppressDynamicImportErrors": false, 
+        "checkCircularDependency": false,
+        "suppressDynamicImportErrors": false,
         "cleanConsole": false, // clean console before repeated by watch
         "faster": false, // skip external parsing and reporting, cannot emit some d.ts and will not replace enum const
         "watchWaiting": 30, // bundling after ${watchWaiting}ms from file modifying
@@ -74,14 +83,18 @@ if-tab --clear-cache # clear cache
         "cacheMemory": "1MB", // cache memory for watching
         "module": "none", // "commonjs"|"none"|"private"|"self"|"window"|"this"|"var (varname)"|"let (varname)"|"const (varname)"
         "preimport": [], // modules for pre-import. it replaces require('name') to __tsb.name,
-        "noSourceMapWorker": false // do not use the worker for the sourcemap generating.
+        "noSourceMapWorker": false, // do not use the worker for the sourcemap generating.
+        "beginWrap": "", // begining of the bundled file. it does not contain any lines
+        "endWrap": "" // ending of the bundled file. it does not contain any lines
     },
     "compilerOptions": {
         /* ... */
     }
 }
 ```
-* define entries with bundler options  
+
+-   define entries with bundler options
+
 ```js
 {
     "entry": {
@@ -104,7 +117,9 @@ if-tab --clear-cache # clear cache
     }
 }
 ```
-* Sharing codes  
+
+-   Sharing codes
+
 ```js
 {
     "entry": "./index.ts",
@@ -123,6 +138,7 @@ if-tab --clear-cache # clear cache
 ```
 
 ### Build with API
+
 ```ts
 import { bundle, bundleWatch } = require('if-tsb');
 
@@ -133,6 +149,7 @@ bundle(['./entry.ts'] /*, './output.js' */); // build
 ```
 
 ### Links
-* [Discord](https://discord.gg/pC9XdkC)
-* [Bug Report/Issues](https://github.com/bdsx/if-tsb/issues)
-* [Donate/PayPal](https://rua.kr/webapp/donate)
+
+-   [Discord](https://discord.gg/pC9XdkC)
+-   [Bug Report/Issues](https://github.com/bdsx/if-tsb/issues)
+-   [Donate/PayPal](https://rua.kr/webapp/donate)
