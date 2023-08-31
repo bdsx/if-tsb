@@ -310,7 +310,7 @@ const indexOfSep: (path: string, offset?: number) => number =
 
 const lastIndexOfSep: (path: string, offset?: number) => number =
     path.sep === "/"
-        ? (v, offset) => v.lastIndexOf(v, offset)
+        ? (v, offset) => v.lastIndexOf("/", offset)
         : (v, offset) =>
               Math.max(
                   v.lastIndexOf("/", offset),
