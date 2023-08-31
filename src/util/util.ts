@@ -299,7 +299,7 @@ export function parsePostfix(
 
 const indexOfSep: (path: string, offset?: number) => number =
     path.sep === "/"
-        ? (v, offset) => v.indexOf(v, offset)
+        ? (v, offset) => v.indexOf("/", offset)
         : (v, offset) => {
               const idx1 = v.indexOf("/", offset);
               const idx2 = v.indexOf(path.sep, offset);
