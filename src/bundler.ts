@@ -531,7 +531,8 @@ async function bundlingProcess(
         for (const info of refined.imports) {
             const mode = info.getExternalMode();
             if (mode !== ExternalMode.NoExternal) {
-                bundler.getModuleId(info.mpath, mode);
+                const id = bundler.getModuleId(info.mpath, mode); // it makes id
+                id.isAppended = true;
             } else {
                 const mpath = info.mpath;
                 const childModule = bundler.getModule(
@@ -549,8 +550,8 @@ async function bundlingProcess(
     }
 
     async function append(module: BundlerModule): Promise<void> {
-        if (module.isAppended) return;
-        module.isAppended = true;
+        if (module.id.isAppended) return;
+        module.id.isAppended = true;
         if (module.isEntry) {
             entryModuleIsAccessed = true;
             return;
@@ -573,12 +574,12 @@ async function bundlingProcess(
         for (const child of module.children) {
             const childModule = child.module;
             if (childModule.needDeclaration) {
-                if (childModule.isAppended) {
+                if (childModule.id.isAppended) {
                     if (!nextTargets.delete(childModule)) continue;
                 }
                 nextTargetsFirst.add(childModule);
             } else {
-                if (childModule.isAppended) continue;
+                if (childModule.id.isAppended) continue;
                 nextTargets.add(childModule);
             }
         }
@@ -662,6 +663,9 @@ async function bundlingProcess(
         memcache.release(refined);
     }
 
+    for (const id of bundler.idmap.values()) {
+        id.isAppended = false;
+    }
     const deplist = new DepList();
     const nextTargetsFirst = new Set<BundlerModule>();
     const nextTargets = new Set<BundlerModule>();
@@ -705,7 +709,7 @@ async function bundlingProcess(
     if (bundler.entryApath !== null) {
         entryModule = bundler.getModule(bundler.entryApath, null);
         entryModule.isEntry = true;
-        entryModule.isAppended = true;
+        entryModule.id.isAppended = true;
         if (bundler.declaration) entryModule.needDeclaration = true;
         if (bundler.verbose) console.log(`entry - ${entryModule.mpath}`);
         if (!(await cachedStat.exists(bundler.entryApath))) {
@@ -872,7 +876,7 @@ async function bundlingProcess(
             sourceMapLineOffset++;
         }
 
-        if (bundler.idmap.has("__resolve")) {
+        if (bundler.idmap.get("__resolve")?.isAppended) {
             if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
                 await jsWriter.write(`__resolve(rpath){\n`);
             } else {

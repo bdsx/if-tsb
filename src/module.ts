@@ -443,7 +443,6 @@ export class BundlerModule {
     public readonly id: BundlerModuleId;
     public readonly rpath: string;
     public children: ChildModule[] | null = null;
-    public isAppended = false;
     public isEntry = false;
     public checkState = CheckState.None;
     public needDeclaration = false;
@@ -1437,49 +1436,56 @@ export class BundlerModule {
                 let rpath: string;
 
                 if (bundler.browserAPathRoot === null) {
-                    helper.addExternalList(
-                        "path",
-                        ExternalMode.Preimport,
-                        null,
-                        false
-                    );
-                    helper.addExternalList(
-                        "__resolve",
-                        ExternalMode.Manual,
-                        null,
-                        false
-                    );
-                    helper.addExternalList(
-                        "__dirname",
-                        ExternalMode.Manual,
-                        null,
-                        false
-                    );
-                    rpath = path.relative(
-                        path.dirname(bundler.output),
-                        this.id.apath
-                    );
+                    // is node
 
-                    const prefix = this.isEntry
-                        ? ""
-                        : bundler.constKeyword + " "; // global scope, Identifier '__dirname' has already been declared issue
-                    if (useFileName) {
-                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${prefix}__filename=${
-                            bundler.globalVarName
-                        }.__resolve(${JSON.stringify(rpath)});\n`;
-                    }
-                    if (useDirName) {
-                        rpath = path.dirname(rpath);
-                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${prefix}__dirname=${
-                            bundler.globalVarName
-                        }.__resolve(${JSON.stringify(rpath)});\n`;
+                    if (!this.isEntry) {
+                        // no need if it's entry
+
+                        helper.addExternalList(
+                            "path",
+                            ExternalMode.Preimport,
+                            null,
+                            false
+                        );
+                        helper.addExternalList(
+                            "__resolve",
+                            ExternalMode.Manual,
+                            null,
+                            false
+                        );
+                        helper.addExternalList(
+                            "__dirname",
+                            ExternalMode.Manual,
+                            null,
+                            false
+                        );
+                        rpath = path.relative(
+                            path.dirname(bundler.output),
+                            this.id.apath
+                        );
+
+                        const prefix = bundler.constKeyword + " ";
+                        if (useFileName) {
+                            if (path.sep !== "/")
+                                rpath = rpath.replace(/\\/g, "/");
+                            content += `${prefix}__filename=${
+                                bundler.globalVarName
+                            }.__resolve(${JSON.stringify(rpath)});\n`;
+                        }
+                        if (useDirName) {
+                            rpath = path.dirname(rpath);
+                            if (path.sep !== "/")
+                                rpath = rpath.replace(/\\/g, "/");
+                            content += `${prefix}__dirname=${
+                                bundler.globalVarName
+                            }.__resolve(${JSON.stringify(rpath)});\n`;
+                        }
                     }
                 } else {
+                    // is browser
                     const prefix = this.isEntry
                         ? "var "
-                        : bundler.constKeyword + " "; //
+                        : bundler.constKeyword + " ";
 
                     rpath = path.relative(
                         bundler.browserAPathRoot,
@@ -1636,6 +1642,7 @@ export class BundlerModule {
 
 export class BundlerModuleId {
     public readonly kind: ScriptKind;
+    public isAppended = false;
     constructor(
         public readonly number: number,
         public readonly varName: string,
