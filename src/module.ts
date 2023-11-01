@@ -1502,9 +1502,9 @@ export class BundlerModule {
                     }
                 }
             }
-            content += stripper.strippedComments;
             refined.sourceMapOutputLineOffset =
                 count(content, "\n") - stripper.stripedLine;
+            content += stripper.strippedComments;
             content += pureContent.substring(stripper.index, contentEnd);
             content += "\n";
             if (this.isEntry) {

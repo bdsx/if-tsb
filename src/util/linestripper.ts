@@ -48,10 +48,11 @@ export class LineStripper {
                         this.content.substring(commentClose, end).trim() === ""
                     ) {
                         end++;
-                        this.strippedComments += this.content.substring(
+                        const commentBlock = this.content.substring(
                             this.index,
                             end
                         );
+                        this.strippedComments += commentBlock;
                         this.index = end;
                     }
                     return false;
@@ -60,11 +61,13 @@ export class LineStripper {
             })) !== null
         ) {
             this.strippedComments += commentLine + "\n";
+            this.stripedLine--;
         }
         while (
             (commentLine = this._strip((line) => /^var [,_a-z ]+;$/.test(line)))
         ) {
             this.strippedComments += commentLine + "\n";
+            this.stripedLine--;
         }
         return this._strip(cb);
     }
