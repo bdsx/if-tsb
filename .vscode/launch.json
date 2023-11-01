@@ -8,9 +8,7 @@
             "type": "node",
             "request": "launch",
             "name": "Bundle Self",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
+            "skipFiles": ["<node_internals>/**"],
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", ".", "-w"],
             "console": "integratedTerminal"
@@ -19,9 +17,7 @@
             "type": "node",
             "request": "launch",
             "name": "Bundle ftp-kr",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
+            "skipFiles": ["<node_internals>/**"],
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", "../ftp-kr", "-w"],
             "console": "integratedTerminal"
@@ -30,9 +26,7 @@
             "type": "node",
             "request": "launch",
             "name": "PEGen",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
+            "skipFiles": ["<node_internals>/**"],
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\nativegen\\testpegen.ts"],
             "console": "integratedTerminal"
@@ -41,11 +35,22 @@
             "type": "node",
             "request": "launch",
             "name": "beta.contest.systems",
-            "skipFiles": [
-                "<node_internals>/**"
-            ],
+            "skipFiles": ["<node_internals>/**"],
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../beta.contest.systems", "-w"],
+            "args": [
+                "${workspaceFolder}\\src\\cli.ts",
+                "../beta.contest.systems",
+                "-w"
+            ],
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "hepims",
+            "skipFiles": ["<node_internals>/**"],
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+            "args": ["${workspaceFolder}\\src\\cli.ts", "../hepims", "-w"],
             "console": "integratedTerminal"
         }
     ]

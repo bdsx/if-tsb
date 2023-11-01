@@ -15,6 +15,9 @@
                 "bundleExternals": ["arg"],
                 "wrapBegin": "//test - begin\n",
                 "wrapEnd": "\n//test - end\n"
+            },
+            "compilerOptions": {
+                "declaration": true
             }
         }
     },

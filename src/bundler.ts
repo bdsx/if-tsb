@@ -571,8 +571,15 @@ async function bundlingProcess(
 
         for (const child of module.children) {
             const childModule = child.module;
-            if (childModule.isAppended) continue;
-            nextTargets.push(childModule);
+            if (childModule.needDeclaration) {
+                if (childModule.isAppended) {
+                    if (!nextTargets.delete(childModule)) continue;
+                }
+                nextTargetsFirst.add(childModule);
+            } else {
+                if (childModule.isAppended) continue;
+                nextTargets.add(childModule);
+            }
         }
     }
 
@@ -655,7 +662,8 @@ async function bundlingProcess(
     }
 
     const deplist = new DepList();
-    let nextTargets: BundlerModule[] = [];
+    const nextTargetsFirst = new Set<BundlerModule>();
+    const nextTargets = new Set<BundlerModule>();
 
     let sourceMapLineOffset = 0;
     let entryModuleIsAccessed = false;
@@ -830,14 +838,21 @@ async function bundlingProcess(
     for (const apath of bundler.files) {
         const libmodule = bundler.getModule(apath, null);
         if (bundler.declaration) libmodule.needDeclaration = true;
-        nextTargets.push(libmodule);
+        nextTargets.add(libmodule);
     }
 
     // module load loop
     for (;;) {
-        const modules = nextTargets;
-        nextTargets = [];
-        if (modules.length === 0) break;
+        let modules: BundlerModule[];
+        if (nextTargetsFirst.size !== 0) {
+            modules = [...nextTargetsFirst];
+            nextTargetsFirst.clear();
+        } else if (nextTargets.size !== 0) {
+            modules = [...nextTargets];
+            nextTargets.clear();
+        } else {
+            break;
+        }
         for (const module of modules) {
             await append(module);
         }
