@@ -424,7 +424,7 @@ export class ParsedImportPath {
 
     isBuiltInModule(): boolean {
         if (this.importName.startsWith(".")) return false;
-        return tshelper.builtin.has(this.mpath);
+        return tshelper.isBuiltInModule(this.mpath);
     }
 
     isExternalModule(): boolean {

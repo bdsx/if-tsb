@@ -1,8 +1,39 @@
 import * as colors from "colors";
 import * as ts from "typescript";
 import { cachedStat } from "./util/cachedstat";
+import { getFirstParent } from "./util/util";
 import path = require("path");
 const isExportingModuleMap = new WeakMap<ts.SourceFile, boolean>();
+
+const builtin = new Set<string>([
+    "assert",
+    "buffer",
+    "child_process",
+    "cluster",
+    "crypto",
+    "dns",
+    "domain",
+    "events",
+    "fs",
+    "http",
+    "https",
+    "net",
+    "os",
+    "path",
+    "punycode",
+    "querystring",
+    "readline",
+    "repl",
+    "stream",
+    "string_decoder",
+    "dgram",
+    "url",
+    "util",
+    "v8",
+    "vm",
+    "zlib",
+    "tls",
+]);
 
 export namespace tshelper {
     export interface TsConfigJson {
@@ -25,37 +56,11 @@ export namespace tshelper {
         ModuleNotFound = 2307,
     }
 
-    export const builtin = new Set<string>([
-        "assert",
-        "buffer",
-        "child_process",
-        "cluster",
-        "crypto",
-        "dns",
-        "domain",
-        "events",
-        "fs",
-        "http",
-        "https",
-        "net",
-        "os",
-        "path",
-        "punycode",
-        "querystring",
-        "readline",
-        "repl",
-        "stream",
-        "string_decoder",
-        "dgram",
-        "url",
-        "util",
-        "v8",
-        "vm",
-        "zlib",
-        "tls",
-    ]);
     export const defaultCompilerOptions = ts.getDefaultCompilerOptions();
 
+    export function isBuiltInModule(mpath: string): boolean {
+        return builtin.has(getFirstParent(mpath));
+    }
     export function isExporting(node: ts.Node): boolean {
         if (ts.isVariableDeclaration(node)) {
             return isExporting(node.parent.parent);

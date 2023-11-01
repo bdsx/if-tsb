@@ -409,3 +409,15 @@ export function* getParents(path: string): IterableIterator<string> {
         idx = max - 1;
     }
 }
+
+export function getFirstParent(path: string): string {
+    let idx = path.indexOf("/");
+    const b = path.indexOf("\\");
+    if (idx === -1) {
+        if (b === -1) return path;
+        idx = b;
+    } else {
+        if (b < idx) idx = b;
+    }
+    return path.substring(0, idx);
+}

@@ -25,6 +25,7 @@ import {
     changeExt,
     concurrent,
     count,
+    getFirstParent,
     getParents,
     getScriptKind,
     millisecondFrom,
@@ -452,7 +453,7 @@ export class Bundler {
 
     isBundlable(mpath: string): boolean {
         if (mpath.startsWith(".")) return true;
-        if (tshelper.builtin.has(mpath)) return false;
+        if (tshelper.isBuiltInModule(getFirstParent(mpath))) return false;
         if (this.bundleExternals instanceof Set) {
             for (const dir of getParents(mpath)) {
                 if (this.bundleExternals.has(dir)) return true;

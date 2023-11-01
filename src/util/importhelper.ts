@@ -41,7 +41,7 @@ export class ImportHelper {
         const info = module.resolvedModule;
         if (info == null) {
             if (!importString.startsWith(".")) {
-                if (tshelper.builtin.has(importString)) {
+                if (tshelper.isBuiltInModule(importString)) {
                     return new ImportingModuleInfo(
                         importString,
                         true,
