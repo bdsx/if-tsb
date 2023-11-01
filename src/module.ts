@@ -1438,48 +1438,44 @@ export class BundlerModule {
                 if (bundler.browserAPathRoot === null) {
                     // is node
 
-                    if (!this.isEntry) {
-                        // no need if it's entry
+                    helper.addExternalList(
+                        "path",
+                        ExternalMode.Preimport,
+                        null,
+                        false
+                    );
+                    helper.addExternalList(
+                        "__resolve",
+                        ExternalMode.Manual,
+                        null,
+                        false
+                    );
+                    helper.addExternalList(
+                        "__dirname",
+                        ExternalMode.Manual,
+                        null,
+                        false
+                    );
+                    rpath = path.relative(
+                        path.dirname(bundler.output),
+                        this.id.apath
+                    );
 
-                        helper.addExternalList(
-                            "path",
-                            ExternalMode.Preimport,
-                            null,
-                            false
-                        );
-                        helper.addExternalList(
-                            "__resolve",
-                            ExternalMode.Manual,
-                            null,
-                            false
-                        );
-                        helper.addExternalList(
-                            "__dirname",
-                            ExternalMode.Manual,
-                            null,
-                            false
-                        );
-                        rpath = path.relative(
-                            path.dirname(bundler.output),
-                            this.id.apath
-                        );
-
-                        const prefix = bundler.constKeyword + " ";
-                        if (useFileName) {
-                            if (path.sep !== "/")
-                                rpath = rpath.replace(/\\/g, "/");
-                            content += `${prefix}__filename=${
-                                bundler.globalVarName
-                            }.__resolve(${JSON.stringify(rpath)});\n`;
-                        }
-                        if (useDirName) {
-                            rpath = path.dirname(rpath);
-                            if (path.sep !== "/")
-                                rpath = rpath.replace(/\\/g, "/");
-                            content += `${prefix}__dirname=${
-                                bundler.globalVarName
-                            }.__resolve(${JSON.stringify(rpath)});\n`;
-                        }
+                    const prefix = this.isEntry // need to replace to the TS dir path even it's the entry
+                        ? ""
+                        : bundler.constKeyword + " ";
+                    if (useFileName) {
+                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                        content += `${prefix}__filename=${
+                            bundler.globalVarName
+                        }.__resolve(${JSON.stringify(rpath)});\n`;
+                    }
+                    if (useDirName) {
+                        rpath = path.dirname(rpath);
+                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                        content += `${prefix}__dirname=${
+                            bundler.globalVarName
+                        }.__resolve(${JSON.stringify(rpath)});\n`;
                     }
                 } else {
                     // is browser
