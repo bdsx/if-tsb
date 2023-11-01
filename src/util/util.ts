@@ -417,7 +417,7 @@ export function getFirstParent(path: string): string {
         if (b === -1) return path;
         idx = b;
     } else {
-        if (b < idx) idx = b;
+        if (b !== -1 && b < idx) idx = b;
     }
     return path.substring(0, idx);
 }
