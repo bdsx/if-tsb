@@ -194,6 +194,8 @@ const _kindMap = new Map<string, ts.ScriptKind>();
 _kindMap.set(".TS", ts.ScriptKind.TS);
 _kindMap.set(".TSX", ts.ScriptKind.TSX);
 _kindMap.set(".JS", ts.ScriptKind.JS);
+_kindMap.set(".CJS", ts.ScriptKind.JS);
+_kindMap.set(".MJS", ts.ScriptKind.JS);
 _kindMap.set(".JSX", ts.ScriptKind.JSX);
 _kindMap.set(".JSON", ts.ScriptKind.JSON);
 
