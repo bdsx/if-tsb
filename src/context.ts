@@ -290,18 +290,40 @@ export class BundlerMainContext {
         return map;
     }
 
-    makeBundlersWithPath(
+    private importBundler_(
+        imported: Set<string>,
         configPath: string | null,
         outputOrConfig?: string | TsConfig | null
     ): Bundler[] {
         const options: (tshelper.ParsedTsConfig & TsConfig) | null =
             tshelper.parseTsConfig(configPath, outputOrConfig);
+
+        const bundlers: Bundler[] = [];
+        if (outputOrConfig == null) {
+            const key = options.tsconfigPath ?? options.basedir;
+            if (imported.has(key)) return bundlers;
+            imported.add(key);
+        }
+
+        if (options.import instanceof Array) {
+            for (const str of options.import) {
+                if (typeof str === "string") {
+                    const importTsConfig = path.isAbsolute(str)
+                        ? str
+                        : path.join(options.basedir, str);
+                    bundlers.push(
+                        ...this.importBundler_(imported, importTsConfig)
+                    );
+                }
+            }
+        }
+
         if (options.entry === undefined) {
-            tshelper.reportMessage(
+            this.reportMessage(
                 tshelper.ErrorCode.ModuleNotFound,
                 "Entry not found"
             );
-            return [];
+            return bundlers;
         }
 
         const compilerOptions = options.compilerOptions;
@@ -329,11 +351,10 @@ export class BundlerMainContext {
             }
             entry = out;
         } else if (typeof entry !== "object") {
-            tshelper.reportMessage(IfTsbError.WrongUsage, "Invalid entry type");
-            return [];
+            this.reportMessage(IfTsbError.WrongUsage, "Invalid entry type");
+            return bundlers;
         }
 
-        const bundlers: Bundler[] = [];
         for (const entryfile in entry) {
             let output: string | Record<string, unknown> = entry[entryfile];
             let newoptions = options;
@@ -387,6 +408,13 @@ export class BundlerMainContext {
             }
         }
         return bundlers;
+    }
+
+    makeBundlersWithPath(
+        configPath: string | null,
+        outputOrConfig?: string | TsConfig | null
+    ): Bundler[] {
+        return this.importBundler_(new Set(), configPath, outputOrConfig);
     }
 
     makeBundlers(options: TsConfig): Bundler[] {

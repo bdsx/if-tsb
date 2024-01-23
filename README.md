@@ -69,6 +69,7 @@ if-tab --clear-cache # clear cache
 {
     "entry": "./index.ts",
     "output": "[dirname]/[name].bundled.js",
+    "import": ["path/to/other/tsconfig/directory"],
     "bundlerOptions": {
         "globalModuleVarName": "__tsb",
         "checkCircularDependency": false,

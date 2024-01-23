@@ -52,6 +52,7 @@ export interface TsConfig extends tshelper.TsConfigJson {
     include?: string[];
     entry?: string[] | Record<string, string | OutputOptions> | string;
     output?: string | null;
+    import?: string[];
 
     bundlerOptions?: BundlerOptions;
 

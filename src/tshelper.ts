@@ -356,6 +356,8 @@ export namespace tshelper {
         configPath: string | null,
         outputOrConfig?: string | TsConfigJson | null
     ): ParsedTsConfig {
+        if (configPath !== null) configPath = path.resolve(configPath);
+
         const options = new ParsedTsConfig();
 
         _optionReady: try {
@@ -370,9 +372,7 @@ export namespace tshelper {
                 }
                 if (options.compilerOptions) {
                     options.basedir =
-                        configPath !== null
-                            ? path.resolve(configPath)
-                            : process.cwd();
+                        configPath !== null ? configPath : process.cwd();
                     const parsed = ts.parseJsonConfigFileContent(
                         outputOrConfig,
                         ts.sys,
@@ -389,7 +389,7 @@ export namespace tshelper {
                 options.basedir = process.cwd();
             } else {
                 if (cachedStat.sync(configPath).isDirectory()) {
-                    options.basedir = path.resolve(configPath);
+                    options.basedir = configPath;
                     configPath = null;
                 } else {
                     options.basedir = path.dirname(configPath);

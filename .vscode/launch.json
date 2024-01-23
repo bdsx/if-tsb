@@ -52,6 +52,15 @@
             "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
             "args": ["${workspaceFolder}\\src\\cli.ts", "../hepims", "-w"],
             "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "cbtppms",
+            "skipFiles": ["<node_internals>/**"],
+            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+            "args": ["${workspaceFolder}\\src\\cli.ts", "../cbtppms", "-w"],
+            "console": "integratedTerminal"
         }
     ]
 }
