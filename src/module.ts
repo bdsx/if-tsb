@@ -983,7 +983,6 @@ export class BundlerModule {
                             out.push(
                                 ctx.factory.createExportDeclaration(
                                     undefined,
-                                    undefined,
                                     false,
                                     ctx.factory.createNamedExports(exports)
                                 )

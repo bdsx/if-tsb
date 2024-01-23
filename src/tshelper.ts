@@ -36,6 +36,9 @@ const builtin = new Set<string>([
 ]);
 
 export namespace tshelper {
+    export interface ModifiedNode extends ts.Node {
+        readonly modifiers?: ts.NodeArray<ts.ModifierLike> | undefined;
+    }
     export interface TsConfigJson {
         exclude?: string[];
         include?: string[];
@@ -61,7 +64,7 @@ export namespace tshelper {
     export function isBuiltInModule(mpath: string): boolean {
         return builtin.has(getFirstParent(mpath));
     }
-    export function isExporting(node: ts.Node): boolean {
+    export function isExporting(node: ModifiedNode): boolean {
         if (ts.isVariableDeclaration(node)) {
             return isExporting(node.parent.parent);
         }
@@ -86,7 +89,10 @@ export namespace tshelper {
                 return true;
         }
     }
-    export function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
+    export function hasModifier(
+        node: ModifiedNode,
+        kind: ts.SyntaxKind
+    ): boolean {
         if (node.modifiers == null) return false;
         for (const mod of node.modifiers) {
             if (mod.kind === kind) return true;
