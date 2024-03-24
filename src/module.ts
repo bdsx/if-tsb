@@ -481,11 +481,13 @@ export class BundlerModule {
         dtsMtime: number
     ): RefinedModule | null {
         if (sourceMtime === -1) {
-            this.error(
-                null,
-                IfTsbError.ModuleNotFound,
-                `Cannot find module '${this.mpath}'. refine failed`
-            );
+            if (!this.bundler.suppressModuleNotFoundErrors) {
+                this.error(
+                    null,
+                    IfTsbError.ModuleNotFound,
+                    `Cannot find module '${this.mpath}'. refine failed`
+                );
+            }
             return null;
         }
 
@@ -1746,10 +1748,12 @@ class RefineHelper {
         }
     }
     importError(importName: string): void {
-        this.error(
-            IfTsbError.ModuleNotFound,
-            `Cannot find module '${importName}' or its corresponding type declarations.`
-        );
+        if (!this.bundler.suppressModuleNotFoundErrors) {
+            this.error(
+                IfTsbError.ModuleNotFound,
+                `Cannot find module '${importName}' or its corresponding type declarations.`
+            );
+        }
     }
 }
 

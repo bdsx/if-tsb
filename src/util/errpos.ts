@@ -48,14 +48,6 @@ export class ErrorPosition {
         );
     }
 
-    reportImport(importName: string, filePath?: string): void {
-        this.report(
-            tshelper.ErrorCode.ModuleNotFound,
-            `Cannot find module '${importName}' or its corresponding type declarations.`,
-            filePath
-        );
-    }
-
     static report(
         node: ts.Node,
         code: number,
@@ -67,23 +59,6 @@ export class ErrorPosition {
             tshelper.report(filePath ?? "?", 0, 0, code, message, "", 0);
         } else {
             pos.report(code, message, filePath);
-        }
-    }
-    static reportImport(node: ts.StringLiteral, filePath?: string): void {
-        const message = `Cannot find module '${node.text}' or its corresponding type declarations.`;
-        const pos = ErrorPosition.fromNode(node);
-        if (pos === null) {
-            tshelper.report(
-                filePath ?? "?",
-                0,
-                0,
-                tshelper.ErrorCode.ModuleNotFound,
-                message,
-                "",
-                0
-            );
-        } else {
-            pos.report(tshelper.ErrorCode.ModuleNotFound, message, filePath);
         }
     }
 }

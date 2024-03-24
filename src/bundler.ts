@@ -56,6 +56,7 @@ export class Bundler {
     public readonly watchWaiting: number | undefined;
     public readonly checkCircularDependency: boolean;
     public readonly suppressDynamicImportErrors: boolean;
+    public readonly suppressModuleNotFoundErrors: boolean;
     public readonly faster: boolean;
     public readonly bundleExternals: boolean | Set<string>;
     public readonly browser: boolean;
@@ -168,6 +169,8 @@ export class Bundler {
         this.checkCircularDependency = !!boptions.checkCircularDependency;
         this.suppressDynamicImportErrors =
             !!boptions.suppressDynamicImportErrors;
+        this.suppressModuleNotFoundErrors =
+            !!boptions.suppressModuleNotFoundErrors;
         this.faster = !!boptions.faster;
         this.watchWaiting = boptions.watchWaiting;
         if (boptions.bundleExternals instanceof Array) {
@@ -677,11 +680,13 @@ async function bundlingProcess(
     const writeWorker = new AsyncWorker<[BundlerModule, RefinedModule | null]>(
         async ([module, refined]) => {
             if (refined === null) {
-                module.error(
-                    null,
-                    IfTsbError.ModuleNotFound,
-                    `Cannot find module '${module.mpath}'. refine failed.`
-                );
+                if (!module.bundler.suppressModuleNotFoundErrors) {
+                    module.error(
+                        null,
+                        IfTsbError.ModuleNotFound,
+                        `Cannot find module '${module.mpath}'. refine failed.`
+                    );
+                }
                 await jsWriter.write(
                     `${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); },\n`
                 );
