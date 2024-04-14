@@ -22,7 +22,7 @@ export function printNode(node: ts.Node, name: string, tab: string): void {
         if (key === "originalKeywordKind") continue;
         if (key === "flowNode") continue;
         const v = (node as any)[key];
-        if (v instanceof Function) continue;
+        if (typeof v === "function") continue;
         if (v && v["kind"]) nodes[key] = v;
         else console.log(`${tab}${key}=${v}`);
     }
@@ -70,7 +70,7 @@ export function splitContent(
 export function instanceProxy(instance: any): void {
     for (const name in instance) {
         const fn = instance[name];
-        if (fn instanceof Function) {
+        if (typeof fn === "function") {
             instance[name] = function (...args: any[]): any {
                 console.log(name, "(", args.join(", "), ")");
                 return fn.apply(this, args);

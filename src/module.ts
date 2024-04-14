@@ -13,6 +13,7 @@ import { fsp } from "./util/fsp";
 import { ImportHelper } from "./util/importhelper";
 import { LineStripper } from "./util/linestripper";
 import { namelock } from "./util/namelock";
+import { PropNameMap, propNameMap } from "./util/propnamecheck";
 import { WriterStream } from "./util/streamwriter";
 import {
     ScriptKind,
@@ -548,55 +549,47 @@ export class BundlerModule {
             sourceFile
         );
 
+        const mapBase: PropNameMap = {
+            __dirname() {
+                useDirName = true;
+            },
+            __filename() {
+                useFileName = true;
+            },
+            module: {
+                __invoke() {
+                    useModule = true;
+                },
+                exports() {
+                    useModuleExports = true;
+                },
+            },
+            global() {
+                useGlobal = true;
+            },
+            exports() {
+                useExports = true;
+            },
+            import: {
+                meta: {
+                    url(factory) {
+                        useFileName = true;
+                        return factory.createIdentifier("__filename");
+                    },
+                },
+            },
+        };
+
         const jsFactory = (ctx: ts.TransformationContext) => {
             const tool = new MakeTool(ctx, helper, sourceFile, false);
             const importer = new JsImporter(tool, tool.globalVar);
 
             const visit = (_node: ts.Node): ts.Node | ts.Node[] | undefined => {
+                const mapped = propNameMap(ctx.factory, _node, mapBase);
+                if (mapped !== undefined) {
+                    return mapped;
+                }
                 switch (_node.kind) {
-                    case ts.SyntaxKind.FunctionExpression: {
-                        break;
-                    }
-                    case ts.SyntaxKind.Identifier: {
-                        const node = _node as ts.Identifier;
-                        const parent = helper.getParentNode();
-                        let right: string | null = null;
-                        if (parent != null) {
-                            if (ts.isPropertyAccessExpression(parent)) {
-                                const rightNode = parent.name;
-                                if (rightNode === node) break;
-                                if (ts.isIdentifier(rightNode)) {
-                                    right = rightNode.text;
-                                }
-                            } else if (ts.isElementAccessExpression(parent)) {
-                                const arg = parent.argumentExpression;
-                                if (ts.isStringLiteral(arg)) {
-                                    right = arg.text;
-                                }
-                            }
-                        }
-                        switch (node.text) {
-                            case "__dirname":
-                                useDirName = true;
-                                break;
-                            case "__filename":
-                                useFileName = true;
-                                break;
-                            case "module":
-                                useModule = true;
-                                if (right === "exports") {
-                                    useModuleExports = true;
-                                }
-                                break;
-                            case "global":
-                                useGlobal = true;
-                                break;
-                            case "exports":
-                                useExports = true;
-                                break;
-                        }
-                        break;
-                    }
                     case ts.SyntaxKind.ImportEqualsDeclaration: {
                         const node = _node as ts.ImportEqualsDeclaration;
 
