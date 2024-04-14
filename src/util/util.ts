@@ -423,3 +423,10 @@ export function getFirstParent(path: string): string {
     }
     return path.substring(0, idx);
 }
+
+export function setNullProto(obj: any) {
+    Object.setPrototypeOf(obj, null);
+    for (const key in obj) {
+        setNullProto(obj[key]);
+    }
+}

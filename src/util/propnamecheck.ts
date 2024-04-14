@@ -6,18 +6,11 @@ export interface PropNameMap {
         | ((factory: ts.NodeFactory) => ts.Node | void)
         | undefined;
 }
-function setNullProto(obj: any) {
-    Object.setPrototypeOf(obj, null);
-    for (const key in obj) {
-        setNullProto(obj[key]);
-    }
-}
 export function propNameMap<T extends ts.Node>(
     factory: ts.NodeFactory,
     target: T,
     map: PropNameMap
 ): T | void {
-    setNullProto(map);
     const remapper = new Remapper(map);
     const fn = remapper.enter(target);
     if (fn !== undefined) {
@@ -38,7 +31,7 @@ class Remapper {
                 } else if (typeof importObj === "function") {
                     return importObj;
                 } else {
-                    const fn = importObj[String(target.name.escapedText)];
+                    const fn = importObj[String(target.name.text)];
                     if (fn === undefined) {
                     } else if (typeof fn === "function") {
                         return fn;
@@ -53,7 +46,7 @@ class Remapper {
             }
         } else if (ts.isIdentifier(target)) {
             if (this.map !== undefined) {
-                const fn = this.map[String(target.escapedText)];
+                const fn = this.map[String(target.text)];
                 this.map = undefined;
 
                 if (fn === undefined) {
@@ -70,7 +63,7 @@ class Remapper {
         } else if (ts.isPropertyAccessExpression(target)) {
             const internal = this.enter(target.expression);
             if (this.map !== undefined) {
-                const fn = this.map[String(target.name.escapedText)];
+                const fn = this.map[String(target.name.text)];
                 this.map = undefined;
 
                 if (fn === undefined) {

@@ -22,6 +22,7 @@ import {
     dirnameModulePath,
     getScriptKind,
     joinModulePath,
+    setNullProto,
 } from "./util/util";
 export const CACHE_MEMORY_DEFAULT = 1024 * 1024 * 1024;
 memcache.maximum = CACHE_MEMORY_DEFAULT;
@@ -579,6 +580,7 @@ export class BundlerModule {
                 },
             },
         };
+        setNullProto(mapBase);
 
         const jsFactory = (ctx: ts.TransformationContext) => {
             const tool = new MakeTool(ctx, helper, sourceFile, false);
@@ -587,7 +589,7 @@ export class BundlerModule {
             const visit = (_node: ts.Node): ts.Node | ts.Node[] | undefined => {
                 const mapped = propNameMap(ctx.factory, _node, mapBase);
                 if (mapped !== undefined) {
-                    return mapped;
+                    return helper.visitChildren(mapped, visit, ctx);
                 }
                 switch (_node.kind) {
                     case ts.SyntaxKind.ImportEqualsDeclaration: {
@@ -643,7 +645,7 @@ export class BundlerModule {
                             case ts.SyntaxKind.Identifier: {
                                 const identifier =
                                     node.expression as ts.Identifier;
-                                if (identifier.escapedText === "require") {
+                                if (identifier.text === "require") {
                                     const importPath = helper.parseImportPath(
                                         node.arguments[0]
                                     );
