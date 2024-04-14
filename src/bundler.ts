@@ -889,7 +889,9 @@ async function bundlingProcess(
             }
             if (bundler.browserAPathRoot !== null) {
                 await jsWriter.write(`return this.__dirname+'/'+rpath;\n},\n`);
-                await jsWriter.write(`__dirname:location.href,\n`);
+                await jsWriter.write(
+                    `__dirname:location.href.substring(0,location.href.lastIndexOf('/')),\n`
+                );
             } else {
                 const path = bundler.idmap.get("path")!;
                 await jsWriter.write(

@@ -1431,24 +1431,13 @@ export class BundlerModule {
             if (useFileName || useDirName) {
                 let rpath: string;
 
+                let prefix: string;
                 if (bundler.browserAPathRoot === null) {
                     // is node
-
+                    prefix = this.isEntry ? "" : bundler.constKeyword + " ";
                     helper.addExternalList(
                         "path",
                         ExternalMode.Preimport,
-                        null,
-                        false
-                    );
-                    helper.addExternalList(
-                        "__resolve",
-                        ExternalMode.Manual,
-                        null,
-                        false
-                    );
-                    helper.addExternalList(
-                        "__dirname",
-                        ExternalMode.Manual,
                         null,
                         false
                     );
@@ -1456,46 +1445,39 @@ export class BundlerModule {
                         path.dirname(bundler.output),
                         this.id.apath
                     );
-
-                    const prefix = this.isEntry // need to replace to the TS dir path even it's the entry
-                        ? ""
-                        : bundler.constKeyword + " ";
-                    if (useFileName) {
-                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${prefix}__filename=${
-                            bundler.globalVarName
-                        }.__resolve(${JSON.stringify(rpath)});\n`;
-                    }
-                    if (useDirName) {
-                        rpath = path.dirname(rpath);
-                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${prefix}__dirname=${
-                            bundler.globalVarName
-                        }.__resolve(${JSON.stringify(rpath)});\n`;
-                    }
                 } else {
                     // is browser
-                    const prefix = this.isEntry
-                        ? "var "
-                        : bundler.constKeyword + " ";
-
+                    prefix = this.isEntry ? "var " : bundler.constKeyword + " ";
                     rpath = path.relative(
                         bundler.browserAPathRoot,
                         this.id.apath
                     );
-                    if (useFileName) {
-                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${prefix}__filename=${JSON.stringify(
-                            "/" + rpath
-                        )};\n`;
-                    }
-                    if (useDirName) {
-                        rpath = path.dirname(rpath);
-                        if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
-                        content += `${prefix}__dirname=${JSON.stringify(
-                            "/" + rpath
-                        )};\n`;
-                    }
+                }
+                helper.addExternalList(
+                    "__resolve",
+                    ExternalMode.Manual,
+                    null,
+                    false
+                );
+                helper.addExternalList(
+                    "__dirname",
+                    ExternalMode.Manual,
+                    null,
+                    false
+                );
+
+                if (useFileName) {
+                    if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                    content += `${prefix}__filename=${
+                        bundler.globalVarName
+                    }.__resolve(${JSON.stringify(rpath)});\n`;
+                }
+                if (useDirName) {
+                    rpath = path.dirname(rpath);
+                    if (path.sep !== "/") rpath = rpath.replace(/\\/g, "/");
+                    content += `${prefix}__dirname=${
+                        bundler.globalVarName
+                    }.__resolve(${JSON.stringify(rpath)});\n`;
                 }
             }
             refined.sourceMapOutputLineOffset =
