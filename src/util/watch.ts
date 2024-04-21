@@ -17,7 +17,7 @@ class WatchItem<T> {
 export class FilesWatcher<T> {
     private readonly watching = new Map<string, WatchItem<T>>();
     private readonly modified = new Set<WatchItem<T>>();
-    private timeout: NodeJS.Timer | null = null;
+    private timeout: NodeJS.Timeout | null = null;
     private paused = false;
 
     constructor(

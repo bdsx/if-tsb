@@ -3,7 +3,7 @@ import * as ts from "typescript";
 import type { Bundler } from "./bundler";
 import { memcache } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
-import { SourceFileData } from "./sourcemap/sourcefilecache";
+import { StringFileData } from "./sourcemap/sourcefilecache";
 import { tshelper } from "./tshelper";
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
 import { CACHE_SIGNATURE, getCacheFilePath } from "./util/cachedir";
@@ -15,6 +15,7 @@ import { LineStripper } from "./util/linestripper";
 import { namelock } from "./util/namelock";
 import { PropNameMap, propNameMap } from "./util/propnamecheck";
 import { WriterStream } from "./util/streamwriter";
+import { DisposableArray, disposeSymbol } from "./util/disposable";
 import {
     ScriptKind,
     SkipableTaskQueue,
@@ -386,8 +387,13 @@ export class ParsedImportPath {
         return factory.createExternalModuleReference(mpathLitral);
     }
 
-    getAbsolutePath(): string | null {
-        if (this.importAPath !== undefined) return this.importAPath;
+    getAbsolutePath(): string {
+        if (this.importAPath !== undefined) {
+            if (this.importAPath === null) {
+                throw new IfTsbErrorMessage(IfTsbError.ModuleNotFound, null);
+            }
+            return this.importAPath;
+        }
         const module = this.helper.module;
         const bundler = module.bundler;
         let modulePath = ts.nodeModuleNameResolver(
@@ -407,8 +413,8 @@ export class ParsedImportPath {
             );
         const info = modulePath.resolvedModule;
         if (info == null) {
-            this.helper.importError(this.importName);
             this.importAPath = null;
+            this.helper.throwImportError(this.importName);
         } else {
             this.importAPath = path.isAbsolute(info.resolvedFileName)
                 ? path.join(info.resolvedFileName)
@@ -517,19 +523,19 @@ export class BundlerModule {
         const moduleinfo = getScriptKind(moduleAPath);
         const printer = ts.createPrinter();
 
-        const refs: SourceFileData[] = [];
+        using refs = new DisposableArray();
 
         let typeChecker: ts.TypeChecker;
 
         function getSourceFile(filepath: string): ts.SourceFile {
             const fileName = filepath.replace(/\\/g, "/");
             let data = bundler.sourceFileCache.take(fileName);
-            refs.push(data);
-            if (data.isModifiedSync()) {
+            refs.append(data);
+            if (data.file.isModifiedSync()) {
                 memcache.expire(data);
                 data = bundler.sourceFileCache.take(fileName);
             }
-            return data.sourceFile;
+            return data.sourceFile!;
         }
 
         let sourceFile: ts.SourceFile;
@@ -587,65 +593,50 @@ export class BundlerModule {
             const importer = new JsImporter(tool, tool.globalVar);
 
             const visit = (_node: ts.Node): ts.Node | ts.Node[] | undefined => {
-                const mapped = propNameMap(ctx.factory, _node, mapBase);
-                if (mapped !== undefined) {
-                    return helper.visitChildren(mapped, visit, ctx);
-                }
-                switch (_node.kind) {
-                    case ts.SyntaxKind.ImportEqualsDeclaration: {
-                        const node = _node as ts.ImportEqualsDeclaration;
-
-                        const ref = node.moduleReference;
-                        if (
-                            ref.kind === ts.SyntaxKind.ExternalModuleReference
-                        ) {
-                            const importPath = helper.parseImportPath(
-                                ref.expression
-                            );
-                            if (importPath === null) return node;
-                            const res =
-                                importer.importFromStringLiteral(importPath);
-                            if (res === NOIMPORT) return undefined;
-                            return ctx.factory.createVariableDeclaration(
-                                node.name,
-                                undefined,
-                                undefined,
-                                res !== null
-                                    ? res.node
-                                    : importPath.call(ctx.factory)
-                            );
-                        }
-                        break;
+                try {
+                    const mapped = propNameMap(ctx.factory, _node, mapBase);
+                    if (mapped !== undefined) {
+                        return helper.visitChildren(mapped, visit, ctx);
                     }
-                    case ts.SyntaxKind.CallExpression: {
-                        let node = _node as ts.CallExpression;
-                        switch (node.expression.kind) {
-                            case ts.SyntaxKind.ImportKeyword: {
-                                if (node.arguments.length !== 1) {
-                                    helper.error(
-                                        IfTsbError.Unsupported,
-                                        `Cannot call import with multiple parameters`
-                                    );
-                                    return node;
-                                }
+                    switch (_node.kind) {
+                        case ts.SyntaxKind.ImportEqualsDeclaration: {
+                            const node = _node as ts.ImportEqualsDeclaration;
+
+                            const ref = node.moduleReference;
+                            if (
+                                ref.kind ===
+                                ts.SyntaxKind.ExternalModuleReference
+                            ) {
                                 const importPath = helper.parseImportPath(
-                                    node.arguments[0]
+                                    ref.expression
                                 );
                                 if (importPath === null) return node;
                                 const res =
                                     importer.importFromStringLiteral(
                                         importPath
                                     );
-                                if (res === NOIMPORT)
-                                    return ctx.factory.createObjectLiteralExpression();
-                                return res !== null
-                                    ? res.node
-                                    : importPath.call(ctx.factory);
+                                if (res === NOIMPORT) return undefined;
+                                return ctx.factory.createVariableDeclaration(
+                                    node.name,
+                                    undefined,
+                                    undefined,
+                                    res !== null
+                                        ? res.node
+                                        : importPath.call(ctx.factory)
+                                );
                             }
-                            case ts.SyntaxKind.Identifier: {
-                                const identifier =
-                                    node.expression as ts.Identifier;
-                                if (identifier.text === "require") {
+                            break;
+                        }
+                        case ts.SyntaxKind.CallExpression: {
+                            let node = _node as ts.CallExpression;
+                            switch (node.expression.kind) {
+                                case ts.SyntaxKind.ImportKeyword: {
+                                    if (node.arguments.length !== 1) {
+                                        throw new IfTsbErrorMessage(
+                                            IfTsbError.Unsupported,
+                                            `Cannot call import with multiple parameters`
+                                        );
+                                    }
                                     const importPath = helper.parseImportPath(
                                         node.arguments[0]
                                     );
@@ -659,74 +650,123 @@ export class BundlerModule {
                                     return res !== null
                                         ? res.node
                                         : importPath.call(ctx.factory);
-                                } else {
-                                    const signature =
-                                        typeChecker.getResolvedSignature(node);
-                                    if (typeof signature === "undefined") break;
-                                    const { declaration } = signature;
-                                    if (declaration == null) break;
-                                    const fileName =
-                                        declaration.getSourceFile().fileName;
-                                    if (
-                                        !fileName.endsWith(
-                                            "/if-tsb/reflect.d.ts"
+                                }
+                                case ts.SyntaxKind.Identifier: {
+                                    const identifier =
+                                        node.expression as ts.Identifier;
+                                    if (identifier.text === "require") {
+                                        const importPath =
+                                            helper.parseImportPath(
+                                                node.arguments[0]
+                                            );
+                                        if (importPath === null) return node;
+                                        const res =
+                                            importer.importFromStringLiteral(
+                                                importPath
+                                            );
+                                        if (res === NOIMPORT)
+                                            return ctx.factory.createObjectLiteralExpression();
+                                        return res !== null
+                                            ? res.node
+                                            : importPath.call(ctx.factory);
+                                    } else {
+                                        const signature =
+                                            typeChecker.getResolvedSignature(
+                                                node
+                                            );
+                                        if (typeof signature === "undefined")
+                                            break;
+                                        const { declaration } = signature;
+                                        if (declaration == null) break;
+                                        const fileName =
+                                            declaration.getSourceFile()
+                                                .fileName;
+                                        if (
+                                            !fileName.endsWith(
+                                                "/if-tsb/reflect.d.ts"
+                                            )
                                         )
-                                    )
-                                        break;
-                                    if (
-                                        declaration.kind ===
-                                        ts.SyntaxKind.JSDocSignature
-                                    )
-                                        break;
-                                    if (declaration.name == null) break;
-                                    if (
-                                        declaration.name.getText() !== "reflect"
-                                    )
-                                        break;
-                                    if ((node as any).original != null) {
-                                        node = (node as any).original;
-                                    }
-
-                                    if (node.typeArguments == null) break;
-                                    const params = node.typeArguments.map((v) =>
-                                        typeChecker.getTypeFromTypeNode(v)
-                                    );
-                                    const path = params.shift();
-                                    const funcname = params.shift();
-                                    if (path == null || !path.isStringLiteral())
-                                        break;
-                                    if (
-                                        funcname == null ||
-                                        !funcname.isStringLiteral()
-                                    )
-                                        break;
-                                    const mpath = helper.makeImportModulePath(
-                                        path.value
-                                    );
-                                    const importPath =
-                                        tool.getImportPath(mpath);
-                                    if (importPath === null) break;
-
-                                    if (!moduleReloaderRegistered) {
-                                        moduleReloaderRegistered = true;
-                                        registerModuleReloader(
-                                            that.bundler.tsconfigOriginal
-                                                .compilerOptions
+                                            break;
+                                        if (
+                                            declaration.kind ===
+                                            ts.SyntaxKind.JSDocSignature
+                                        )
+                                            break;
+                                        if (declaration.name == null) break;
+                                        if ((node as any).original != null) {
+                                            node = (node as any).original;
+                                        }
+                                        const funcName =
+                                            declaration.name.getText();
+                                        const tparams = TemplateParams.create(
+                                            tool,
+                                            helper,
+                                            funcName,
+                                            sourceFile.fileName,
+                                            typeChecker,
+                                            node
                                         );
+                                        switch (funcName) {
+                                            case "reflect": {
+                                                if (tparams == null) break;
+                                                const path =
+                                                    tparams.readString();
+                                                const funcname =
+                                                    tparams.readString();
+                                                const importPath =
+                                                    tparams.readImportPath();
+
+                                                if (!moduleReloaderRegistered) {
+                                                    moduleReloaderRegistered =
+                                                        true;
+                                                    registerModuleReloader(
+                                                        that.bundler
+                                                            .tsconfigOriginal
+                                                            .compilerOptions
+                                                    );
+                                                }
+                                                const reflecter =
+                                                    reloadableRequire(
+                                                        require,
+                                                        importPath
+                                                    );
+                                                return reflecter[funcname](
+                                                    ctx,
+                                                    typeChecker,
+                                                    ...tparams.types
+                                                );
+                                            }
+                                            case "importRaw": {
+                                                if (tparams == null) break;
+                                                const path = tparams.readPath();
+
+                                                const file =
+                                                    StringFileData.take(path);
+                                                refs.append(file);
+                                                return ctx.factory.createStringLiteral(
+                                                    file.contents!
+                                                );
+                                            }
+                                        }
                                     }
-                                    const reflecter = reloadableRequire(
-                                        require,
-                                        importPath
-                                    );
-                                    return reflecter[funcname.value](
-                                        ctx,
-                                        typeChecker,
-                                        ...params
-                                    );
                                 }
                             }
+                            break;
                         }
-                        break;
+                    }
+                } catch (err) {
+                    if (err instanceof IfTsbErrorMessage) {
+                        if (err.message !== null) {
+                            refined.errored = true;
+                            that.error(
+                                helper.getErrorPosition(),
+                                err.code,
+                                err.message
+                            );
+                        }
+                        return _node;
+                    } else {
+                        throw err;
                     }
                 }
                 return helper.visitChildren(_node, visit, ctx);
@@ -752,106 +792,122 @@ export class BundlerModule {
                     const visitAbsoluting = (
                         _node: ts.Node
                     ): ts.Node[] | ts.Node | undefined => {
-                        switch (_node.kind) {
-                            case ts.SyntaxKind.Identifier: {
-                                if (_node.parent == null) break;
-                                const symbol =
-                                    typeChecker.getSymbolAtLocation(_node);
-                                if (symbol == null) break;
-                                if (symbol.declarations == null) break;
-                                if (
-                                    !tshelper.isRootIdentifier(
-                                        _node as ts.Identifier
+                        try {
+                            switch (_node.kind) {
+                                case ts.SyntaxKind.Identifier: {
+                                    if (_node.parent == null) break;
+                                    const symbol =
+                                        typeChecker.getSymbolAtLocation(_node);
+                                    if (symbol == null) break;
+                                    if (symbol.declarations == null) break;
+                                    if (
+                                        !tshelper.isRootIdentifier(
+                                            _node as ts.Identifier
+                                        )
                                     )
-                                )
-                                    break;
-                                if (
-                                    symbol.declarations.indexOf(
-                                        _node.parent as ts.Declaration
-                                    ) !== -1
-                                )
-                                    break;
+                                        break;
+                                    if (
+                                        symbol.declarations.indexOf(
+                                            _node.parent as ts.Declaration
+                                        ) !== -1
+                                    )
+                                        break;
 
-                                for (const _decl of symbol.declarations) {
-                                    switch (_decl.kind) {
-                                        case ts.SyntaxKind.NamespaceImport: {
-                                            const decl =
-                                                _decl as ts.NamespaceImport;
-                                            const importDecl =
-                                                decl.parent.parent;
-                                            const importPath =
-                                                helper.parseImportPath(
-                                                    importDecl.moduleSpecifier
-                                                );
-                                            if (importPath === null) continue;
-                                            const res =
-                                                importer.importFromStringLiteral(
-                                                    importPath
-                                                );
-                                            if (res === NOIMPORT) continue;
-                                            return res.node;
-                                        }
-                                        case ts.SyntaxKind.ImportSpecifier: {
-                                            const decl =
-                                                _decl as ts.ImportSpecifier;
-                                            const importDecl =
-                                                decl.parent.parent.parent;
-                                            const importPath =
-                                                helper.parseImportPath(
-                                                    importDecl.moduleSpecifier
-                                                );
-                                            if (importPath === null) continue;
-                                            if (
-                                                _node.parent.kind ===
-                                                ts.SyntaxKind
-                                                    .ExpressionWithTypeArguments
-                                            ) {
-                                                const res =
-                                                    arrImporter.importFromStringLiteral(
-                                                        importPath
+                                    for (const _decl of symbol.declarations) {
+                                        switch (_decl.kind) {
+                                            case ts.SyntaxKind
+                                                .NamespaceImport: {
+                                                const decl =
+                                                    _decl as ts.NamespaceImport;
+                                                const importDecl =
+                                                    decl.parent.parent;
+                                                const importPath =
+                                                    helper.parseImportPath(
+                                                        importDecl.moduleSpecifier
                                                     );
-                                                if (res === NOIMPORT) continue;
-                                                // transformer.
-                                                return tool.createIdentifierChain(
-                                                    [
-                                                        ...res.node,
-                                                        decl.propertyName ||
-                                                            decl.name,
-                                                    ]
-                                                );
-                                            } else {
+                                                if (importPath === null)
+                                                    continue;
                                                 const res =
                                                     importer.importFromStringLiteral(
                                                         importPath
                                                     );
                                                 if (res === NOIMPORT) continue;
-                                                return ctx.factory.createQualifiedName(
-                                                    res.node,
-                                                    decl.propertyName ||
-                                                        decl.name
+                                                return res.node;
+                                            }
+                                            case ts.SyntaxKind
+                                                .ImportSpecifier: {
+                                                const decl =
+                                                    _decl as ts.ImportSpecifier;
+                                                const importDecl =
+                                                    decl.parent.parent.parent;
+                                                const importPath =
+                                                    helper.parseImportPath(
+                                                        importDecl.moduleSpecifier
+                                                    );
+                                                if (importPath === null)
+                                                    continue;
+                                                if (
+                                                    _node.parent.kind ===
+                                                    ts.SyntaxKind
+                                                        .ExpressionWithTypeArguments
+                                                ) {
+                                                    const res =
+                                                        arrImporter.importFromStringLiteral(
+                                                            importPath
+                                                        );
+                                                    if (res === NOIMPORT)
+                                                        continue;
+                                                    // transformer.
+                                                    return tool.createIdentifierChain(
+                                                        [
+                                                            ...res.node,
+                                                            decl.propertyName ||
+                                                                decl.name,
+                                                        ]
+                                                    );
+                                                } else {
+                                                    const res =
+                                                        importer.importFromStringLiteral(
+                                                            importPath
+                                                        );
+                                                    if (res === NOIMPORT)
+                                                        continue;
+                                                    return ctx.factory.createQualifiedName(
+                                                        res.node,
+                                                        decl.propertyName ||
+                                                            decl.name
+                                                    );
+                                                }
+                                            }
+                                            case ts.SyntaxKind.Parameter:
+                                            case ts.SyntaxKind.TypeParameter:
+                                                return _node;
+                                            default: {
+                                                const res =
+                                                    tool.analyizeDeclPath(
+                                                        _node,
+                                                        _decl,
+                                                        outerModulePath
+                                                    );
+                                                return visitWith(
+                                                    res,
+                                                    visitAbsoluting
                                                 );
                                             }
                                         }
-                                        case ts.SyntaxKind.Parameter:
-                                        case ts.SyntaxKind.TypeParameter:
-                                            return _node;
-                                        default: {
-                                            const res = tool.analyizeDeclPath(
-                                                _node,
-                                                _decl,
-                                                outerModulePath
-                                            );
-                                            return visitWith(
-                                                res,
-                                                visitAbsoluting
-                                            );
-                                        }
                                     }
+                                    return _node;
                                 }
+                            }
+                            return visitWith(_node, visitAbsoluting);
+                        } catch (err) {
+                            if (err instanceof IfTsbErrorMessage) {
+                                helper.error(err);
                                 return _node;
+                            } else {
+                                throw err;
                             }
                         }
-                        return visitWith(_node, visitAbsoluting);
                     };
                     return visitAbsoluting;
                 };
@@ -860,273 +916,291 @@ export class BundlerModule {
                     _node: ts.Node,
                     visitor: ts.Visitor
                 ): ts.Node[] | ts.Node | undefined => {
-                    switch (_node.kind) {
-                        case ts.SyntaxKind.ModuleDeclaration: {
-                            let node = _node as ts.ModuleDeclaration;
-                            const res = importer.importFromModuleDecl(node);
-                            if (res === null) break;
-                            if (res === GLOBAL) {
-                                // global module
-                                const visited = ts.visitEachChild(
-                                    node,
-                                    visitAbsoluting(null),
-                                    ctx
-                                );
-                                globalDeclaration += "declare global ";
-                                globalDeclaration += printer.printNode(
-                                    ts.EmitHint.Unspecified,
-                                    visited.body!,
-                                    sourceFile
-                                );
-                                globalDeclaration += "\n";
-                            } else if (res.module === null) {
-                                // external module
-                                const visited = ts.visitEachChild(
-                                    node,
-                                    visitAbsoluting(res.importPath),
-                                    ctx
-                                );
-                                globalDeclaration += 'declare module "';
-                                globalDeclaration += res.importPath.mpath;
-                                globalDeclaration += '"';
-                                globalDeclaration += printer.printNode(
-                                    ts.EmitHint.Unspecified,
-                                    visited.body!,
-                                    sourceFile
-                                );
-                                globalDeclaration += "\n";
-                            } else {
-                                const visited = ts.visitEachChild(
-                                    node,
-                                    visitAbsoluting(res.importPath),
-                                    ctx
-                                );
-                                moduleDeclaration += "export namespace ";
-                                moduleDeclaration += res.moduleId.varName;
-                                moduleDeclaration += printer.printNode(
-                                    ts.EmitHint.Unspecified,
-                                    visited.body!,
-                                    sourceFile
-                                );
-                                moduleDeclaration += "\n";
-                            }
-                            return undefined;
-                        }
-                        case ts.SyntaxKind.DeclareKeyword:
-                            return undefined;
-                        case ts.SyntaxKind.ExportDeclaration: {
-                            const node = _node as ts.ExportDeclaration;
-                            const module = node.moduleSpecifier;
-                            if (module != null) {
-                                helper.error(
-                                    IfTsbError.Unsupported,
-                                    `if-tsb cannot export identifiers from the module`
-                                );
-                                return node;
-                            }
-                            break;
-                        }
-                        case ts.SyntaxKind.ExportAssignment: {
-                            const exportName =
-                                bundler.globalVarName + "_exported";
-                            const out: ts.Node[] = [];
-                            const node = _node as ts.ExportAssignment;
-                            let identifier: ts.Identifier | string;
-                            const exports: ts.ExportSpecifier[] = [];
-                            if (
-                                node.expression.kind ===
-                                ts.SyntaxKind.Identifier
-                            ) {
-                                identifier = node.expression as ts.Identifier;
-                                exports.push(
-                                    ctx.factory.createExportSpecifier(
-                                        false,
-                                        identifier,
-                                        exportName
-                                    )
-                                );
-                            } else {
-                                identifier = exportName;
-                                out.push(
-                                    ctx.factory.createImportEqualsDeclaration(
-                                        undefined,
-                                        false,
-                                        identifier,
-                                        node.expression as ts.ModuleReference
-                                    )
-                                );
-                                exports.push(
-                                    ctx.factory.createExportSpecifier(
-                                        false,
-                                        undefined,
-                                        identifier
-                                    )
-                                );
-                            }
-
-                            if (node.isExportEquals) {
-                                // export = item
-                                exportEquals = true;
-                            } else {
-                                // export defualt item
-                                exports.push(
-                                    ctx.factory.createExportSpecifier(
-                                        false,
-                                        identifier,
-                                        "default"
-                                    )
-                                );
-                            }
-                            out.push(
-                                ctx.factory.createExportDeclaration(
-                                    undefined,
-                                    false,
-                                    ctx.factory.createNamedExports(exports)
-                                )
-                            );
-                            return out;
-                        }
-                        case ts.SyntaxKind.ImportEqualsDeclaration: {
-                            const node = _node as ts.ImportEqualsDeclaration;
-
-                            const ref = node.moduleReference;
-                            if (
-                                ref.kind ===
-                                ts.SyntaxKind.ExternalModuleReference
-                            ) {
-                                const importPath = helper.parseImportPath(
-                                    ref.expression
-                                );
-                                if (importPath === null) return node;
-                                const res =
-                                    importer.importFromStringLiteral(
-                                        importPath
+                    try {
+                        switch (_node.kind) {
+                            case ts.SyntaxKind.ModuleDeclaration: {
+                                let node = _node as ts.ModuleDeclaration;
+                                const res = importer.importFromModuleDecl(node);
+                                if (res === null) break;
+                                if (res === GLOBAL) {
+                                    // global module
+                                    const visited = ts.visitEachChild(
+                                        node,
+                                        visitAbsoluting(null),
+                                        ctx
                                     );
-                                if (res === NOIMPORT) return undefined;
-                                return ctx.factory.createImportEqualsDeclaration(
-                                    undefined,
-                                    false,
-                                    node.name,
-                                    res.node
-                                );
-                            }
-                            break;
-                        }
-                        case ts.SyntaxKind.ImportType: {
-                            // let v:import('module').Type;
-                            const node = _node as ts.ImportTypeNode;
-                            const importPath = helper.parseImportPath(
-                                node.argument
-                            );
-                            if (importPath === null) return node;
-                            const res =
-                                importer.importFromStringLiteral(importPath);
-                            if (res === NOIMPORT) return node;
-                            if (res.moduleId === null) return node;
-                            return tool.joinEntityNames(
-                                res.node,
-                                node.qualifier
-                            );
-                        }
-                        case ts.SyntaxKind.ImportDeclaration: {
-                            // import 'module'; import { a } from 'module'; import a from 'module';
-                            const node = _node as ts.ImportDeclaration;
-                            const importPath = helper.parseImportPath(
-                                node.moduleSpecifier
-                            );
-                            if (importPath === null) return node;
-                            const res =
-                                importer.importFromStringLiteral(importPath);
-                            const clause = node.importClause;
-                            if (clause == null) {
-                                // import 'module';
+                                    globalDeclaration += "declare global ";
+                                    globalDeclaration += printer.printNode(
+                                        ts.EmitHint.Unspecified,
+                                        visited.body!,
+                                        sourceFile
+                                    );
+                                    globalDeclaration += "\n";
+                                } else if (res.module === null) {
+                                    // external module
+                                    const visited = ts.visitEachChild(
+                                        node,
+                                        visitAbsoluting(res.importPath),
+                                        ctx
+                                    );
+                                    globalDeclaration += 'declare module "';
+                                    globalDeclaration += res.importPath.mpath;
+                                    globalDeclaration += '"';
+                                    globalDeclaration += printer.printNode(
+                                        ts.EmitHint.Unspecified,
+                                        visited.body!,
+                                        sourceFile
+                                    );
+                                    globalDeclaration += "\n";
+                                } else {
+                                    const visited = ts.visitEachChild(
+                                        node,
+                                        visitAbsoluting(res.importPath),
+                                        ctx
+                                    );
+                                    moduleDeclaration += "export namespace ";
+                                    moduleDeclaration += res.moduleId.varName;
+                                    moduleDeclaration += printer.printNode(
+                                        ts.EmitHint.Unspecified,
+                                        visited.body!,
+                                        sourceFile
+                                    );
+                                    moduleDeclaration += "\n";
+                                }
                                 return undefined;
                             }
-                            if (res === NOIMPORT) return undefined;
-                            if (clause.namedBindings != null) {
+                            case ts.SyntaxKind.DeclareKeyword:
+                                return undefined;
+                            case ts.SyntaxKind.ExportDeclaration: {
+                                const node = _node as ts.ExportDeclaration;
+                                const module = node.moduleSpecifier;
+                                if (module != null) {
+                                    throw new IfTsbErrorMessage(
+                                        IfTsbError.Unsupported,
+                                        `if-tsb cannot export identifiers from the module`
+                                    );
+                                }
+                                break;
+                            }
+                            case ts.SyntaxKind.ExportAssignment: {
+                                const exportName =
+                                    bundler.globalVarName + "_exported";
                                 const out: ts.Node[] = [];
-                                switch (clause.namedBindings.kind) {
-                                    case ts.SyntaxKind.NamespaceImport:
-                                        // import * as a from 'module';
-                                        if (clause.namedBindings == null) {
-                                            helper.error(
-                                                IfTsbError.Unsupported,
-                                                `Unexpected import syntax`
-                                            );
-                                            return node;
-                                        }
-                                        return ctx.factory.createImportEqualsDeclaration(
+                                const node = _node as ts.ExportAssignment;
+                                let identifier: ts.Identifier | string;
+                                const exports: ts.ExportSpecifier[] = [];
+                                if (
+                                    node.expression.kind ===
+                                    ts.SyntaxKind.Identifier
+                                ) {
+                                    identifier =
+                                        node.expression as ts.Identifier;
+                                    exports.push(
+                                        ctx.factory.createExportSpecifier(
+                                            false,
+                                            identifier,
+                                            exportName
+                                        )
+                                    );
+                                } else {
+                                    identifier = exportName;
+                                    out.push(
+                                        ctx.factory.createImportEqualsDeclaration(
                                             undefined,
                                             false,
-                                            clause.namedBindings.name,
-                                            res.node
-                                        );
-                                    case ts.SyntaxKind.NamedImports:
-                                        // import { a } from 'module';
-                                        for (const element of clause
-                                            .namedBindings.elements) {
-                                            out.push(
-                                                ctx.factory.createImportEqualsDeclaration(
-                                                    undefined,
-                                                    false,
-                                                    element.name,
-                                                    ctx.factory.createQualifiedName(
-                                                        res.node,
-                                                        element.propertyName ||
-                                                            element.name
-                                                    )
-                                                )
-                                            );
-                                        }
-                                        break;
+                                            identifier,
+                                            node.expression as ts.ModuleReference
+                                        )
+                                    );
+                                    exports.push(
+                                        ctx.factory.createExportSpecifier(
+                                            false,
+                                            undefined,
+                                            identifier
+                                        )
+                                    );
                                 }
-                                return out;
-                            } else if (clause.name != null) {
-                                // import a from 'module';
-                                return ctx.factory.createImportEqualsDeclaration(
-                                    undefined,
-                                    false,
-                                    clause.name,
-                                    ctx.factory.createQualifiedName(
-                                        res.node,
-                                        bundler.globalVarName + "_exported"
+
+                                if (node.isExportEquals) {
+                                    // export = item
+                                    exportEquals = true;
+                                } else {
+                                    // export defualt item
+                                    exports.push(
+                                        ctx.factory.createExportSpecifier(
+                                            false,
+                                            identifier,
+                                            "default"
+                                        )
+                                    );
+                                }
+                                out.push(
+                                    ctx.factory.createExportDeclaration(
+                                        undefined,
+                                        false,
+                                        ctx.factory.createNamedExports(exports)
                                     )
                                 );
-                            } else {
-                                helper.error(
-                                    IfTsbError.Unsupported,
-                                    `Unexpected import syntax`
-                                );
-                                return node;
+                                return out;
                             }
-                        }
-                        case ts.SyntaxKind.CallExpression: {
-                            const node = _node as ts.CallExpression;
-                            switch (node.expression.kind) {
-                                case ts.SyntaxKind.ImportKeyword: {
-                                    // const res = import('module');
-                                    if (node.arguments.length !== 1) {
-                                        helper.error(
-                                            IfTsbError.Unsupported,
-                                            `Cannot call import with multiple parameters`
-                                        );
-                                        return _node;
-                                    }
+                            case ts.SyntaxKind.ImportEqualsDeclaration: {
+                                const node =
+                                    _node as ts.ImportEqualsDeclaration;
+
+                                const ref = node.moduleReference;
+                                if (
+                                    ref.kind ===
+                                    ts.SyntaxKind.ExternalModuleReference
+                                ) {
                                     const importPath = helper.parseImportPath(
-                                        node.arguments[0]
+                                        ref.expression
                                     );
                                     if (importPath === null) return node;
                                     const res =
                                         importer.importFromStringLiteral(
                                             importPath
                                         );
-                                    if (res === NOIMPORT)
-                                        return ctx.factory.createObjectLiteralExpression();
-                                    return res.node;
+                                    if (res === NOIMPORT) return undefined;
+                                    return ctx.factory.createImportEqualsDeclaration(
+                                        undefined,
+                                        false,
+                                        node.name,
+                                        res.node
+                                    );
+                                }
+                                break;
+                            }
+                            case ts.SyntaxKind.ImportType: {
+                                // let v:import('module').Type;
+                                const node = _node as ts.ImportTypeNode;
+                                const importPath = helper.parseImportPath(
+                                    node.argument
+                                );
+                                if (importPath === null) return node;
+                                const res =
+                                    importer.importFromStringLiteral(
+                                        importPath
+                                    );
+                                if (res === NOIMPORT) return node;
+                                if (res.moduleId === null) return node;
+                                return tool.joinEntityNames(
+                                    res.node,
+                                    node.qualifier
+                                );
+                            }
+                            case ts.SyntaxKind.ImportDeclaration: {
+                                // import 'module'; import { a } from 'module'; import a from 'module';
+                                const node = _node as ts.ImportDeclaration;
+                                const importPath = helper.parseImportPath(
+                                    node.moduleSpecifier
+                                );
+                                if (importPath === null) return node;
+                                const res =
+                                    importer.importFromStringLiteral(
+                                        importPath
+                                    );
+                                const clause = node.importClause;
+                                if (clause == null) {
+                                    // import 'module';
+                                    return undefined;
+                                }
+                                if (res === NOIMPORT) return undefined;
+                                if (clause.namedBindings != null) {
+                                    const out: ts.Node[] = [];
+                                    switch (clause.namedBindings.kind) {
+                                        case ts.SyntaxKind.NamespaceImport:
+                                            // import * as a from 'module';
+                                            if (clause.namedBindings == null) {
+                                                throw new IfTsbErrorMessage(
+                                                    IfTsbError.Unsupported,
+                                                    `Unexpected import syntax`
+                                                );
+                                            }
+                                            return ctx.factory.createImportEqualsDeclaration(
+                                                undefined,
+                                                false,
+                                                clause.namedBindings.name,
+                                                res.node
+                                            );
+                                        case ts.SyntaxKind.NamedImports:
+                                            // import { a } from 'module';
+                                            for (const element of clause
+                                                .namedBindings.elements) {
+                                                out.push(
+                                                    ctx.factory.createImportEqualsDeclaration(
+                                                        undefined,
+                                                        false,
+                                                        element.name,
+                                                        ctx.factory.createQualifiedName(
+                                                            res.node,
+                                                            element.propertyName ||
+                                                                element.name
+                                                        )
+                                                    )
+                                                );
+                                            }
+                                            break;
+                                    }
+                                    return out;
+                                } else if (clause.name != null) {
+                                    // import a from 'module';
+                                    return ctx.factory.createImportEqualsDeclaration(
+                                        undefined,
+                                        false,
+                                        clause.name,
+                                        ctx.factory.createQualifiedName(
+                                            res.node,
+                                            bundler.globalVarName + "_exported"
+                                        )
+                                    );
+                                } else {
+                                    throw new IfTsbErrorMessage(
+                                        IfTsbError.Unsupported,
+                                        `Unexpected import syntax`
+                                    );
                                 }
                             }
-                            break;
+                            case ts.SyntaxKind.CallExpression: {
+                                const node = _node as ts.CallExpression;
+                                switch (node.expression.kind) {
+                                    case ts.SyntaxKind.ImportKeyword: {
+                                        // const res = import('module');
+                                        if (node.arguments.length !== 1) {
+                                            throw new IfTsbErrorMessage(
+                                                IfTsbError.Unsupported,
+                                                `Cannot call import with multiple parameters`
+                                            );
+                                        }
+                                        const importPath =
+                                            helper.parseImportPath(
+                                                node.arguments[0]
+                                            );
+                                        if (importPath === null) return node;
+                                        const res =
+                                            importer.importFromStringLiteral(
+                                                importPath
+                                            );
+                                        if (res === NOIMPORT)
+                                            return ctx.factory.createObjectLiteralExpression();
+                                        return res.node;
+                                    }
+                                }
+                                break;
+                            }
                         }
+                    } catch (err) {
+                        if (err instanceof IfTsbErrorMessage) {
+                            if (err.message !== null) {
+                                refined.errored = true;
+                                that.error(
+                                    helper.getErrorPosition(),
+                                    err.code,
+                                    err.message
+                                );
+                            }
+                            return _node;
+                        }
+                        throw err;
                     }
                     return helper.visitChildren(_node, visitor, ctx);
                 };
@@ -1547,9 +1621,6 @@ export class BundlerModule {
             refined.sourceMapText = sourceMapText;
         }
 
-        for (const ref of refs) {
-            ref.release();
-        }
         refined.outputLineCount = count(content, "\n");
         refined.content = Buffer.from(content);
         refined.size = content.length + 2048;
@@ -1636,6 +1707,13 @@ class RefineHelper {
         public readonly sourceFile: ts.SourceFile
     ) {}
 
+    error(err: IfTsbErrorMessage) {
+        if (err.message !== null) {
+            this.refined.errored = true;
+            this.module.error(this.getErrorPosition(), err.code, err.message);
+        }
+    }
+
     getParentNode(): ts.Node | undefined {
         return this.stacks[this.stacks.length - 1];
     }
@@ -1648,10 +1726,6 @@ class RefineHelper {
             return ErrorPosition.fromNode(node);
         }
         return null;
-    }
-    error(code: number, message: string): void {
-        this.refined!.errored = true;
-        return this.module.error(this.getErrorPosition(), code, message);
     }
     addExternalList(
         name: string,
@@ -1693,21 +1767,22 @@ class RefineHelper {
         }
         return new ParsedImportPath(this, importPath, out);
     }
-    parseImportPath(stringLiteralNode: ts.Node): ParsedImportPath | null {
+    parseImportPath(stringLiteralNode: ts.Node): ParsedImportPath {
         if (stringLiteralNode.kind === ts.SyntaxKind.LiteralType) {
             stringLiteralNode = (stringLiteralNode as ts.LiteralTypeNode)
                 .literal;
         }
         if (stringLiteralNode.kind !== ts.SyntaxKind.StringLiteral) {
-            if (!this.bundler.suppressDynamicImportErrors) {
-                this.error(
+            if (this.bundler.suppressDynamicImportErrors) {
+                throw new IfTsbErrorMessage(IfTsbError.Unsupported, null);
+            } else {
+                throw new IfTsbErrorMessage(
                     IfTsbError.Unsupported,
                     `if-tsb does not support dynamic import for local module, (${
                         ts.SyntaxKind[stringLiteralNode.kind]
                     } is not string literal)`
                 );
             }
-            return null;
         }
         const node = stringLiteralNode as ts.StringLiteral;
         return this.makeImportModulePath(node.text);
@@ -1724,9 +1799,11 @@ class RefineHelper {
             this.stacks.pop();
         }
     }
-    importError(importName: string): void {
-        if (!this.bundler.suppressModuleNotFoundErrors) {
-            this.error(
+    throwImportError(importName: string): never {
+        if (this.bundler.suppressModuleNotFoundErrors) {
+            throw new IfTsbErrorMessage(IfTsbError.ModuleNotFound, null);
+        } else {
+            throw new IfTsbErrorMessage(
                 IfTsbError.ModuleNotFound,
                 `Cannot find module '${importName}' or its corresponding type declarations.`
             );
@@ -1778,7 +1855,7 @@ class MakeTool {
     /**
      * @return null if not found with errors
      */
-    getImportPath(importPath: ParsedImportPath): string | null {
+    getImportPath(importPath: ParsedImportPath): string {
         const oldsys = this.bundler.sys;
         const sys: ts.System = Object.setPrototypeOf(
             {
@@ -1811,8 +1888,7 @@ class MakeTool {
             if (!importPath.importName.startsWith(".")) {
                 return importPath.mpath;
             }
-            this.helper.importError(importPath.importName);
-            return null;
+            this.helper.throwImportError(importPath.importName);
         }
 
         let childmoduleApath = path.isAbsolute(info.resolvedFileName)
@@ -1822,8 +1898,7 @@ class MakeTool {
         if (kind.kind === ts.ScriptKind.External) {
             childmoduleApath = kind.modulePath + ".js";
             if (!cachedStat.existsSync(childmoduleApath)) {
-                this.helper.importError(importPath.importName);
-                return null;
+                this.helper.throwImportError(importPath.importName);
             }
         }
         return childmoduleApath;
@@ -1860,8 +1935,7 @@ class MakeTool {
         if (res.isExternal) {
             if (!this.bundler.isBundlable(importPath.mpath)) return null;
             if (res.fileNotFound) {
-                this.helper.importError(importPath.importName);
-                return null;
+                this.helper.throwImportError(importPath.importName);
             }
         }
         return res.fileName;
@@ -1907,11 +1981,8 @@ class MakeTool {
                 }
             }
         }
-        class ReturnDirect {
-            constructor(public readonly node: ts.Node) {}
-        }
         const moduleAPath = this.module.id.apath.replace(/\\/g, "/");
-        const get = (node: ts.Node): ts.EntityName | ReturnDirect | null => {
+        const get = (node: ts.Node): ts.EntityName | ReturnDirect => {
             let name: string | null;
             if (tshelper.isModuleDeclaration(node)) {
                 const imported = new DeclNameImporter(
@@ -1919,12 +1990,10 @@ class MakeTool {
                     this.globalVar
                 ).importFromModuleDecl(node);
                 if (imported === null) {
-                    debugger;
-                    this.helper.error(
+                    throw new IfTsbErrorMessage(
                         IfTsbError.Unsupported,
                         `Unresolved module ${node.name.text}`
                     );
-                    return new ReturnDirect(oriNode);
                 } else if (imported === GLOBAL) {
                     return new ReturnDirect(oriNode);
                 } else if (
@@ -1951,12 +2020,10 @@ class MakeTool {
                     // global expected
                     return new ReturnDirect(oriNode);
                 } else {
-                    debugger;
-                    this.helper.error(
+                    throw new IfTsbErrorMessage(
                         IfTsbError.Unsupported,
                         `Unexpected source file ${node.fileName}`
                     );
-                    return new ReturnDirect(oriNode);
                 }
             } else if (
                 ts.isModuleBlock(node) ||
@@ -1984,11 +2051,10 @@ class MakeTool {
                         if (ts.isIdentifier(type))
                             return new ReturnDirect(type);
                     }
-                    this.helper.error(
+                    throw new IfTsbErrorMessage(
                         IfTsbError.Unsupported,
                         `Need to export ${tshelper.getNodeName(node)}`
                     );
-                    return new ReturnDirect(oriNode);
                 }
                 if (res === null) {
                     return this.factory.createIdentifier(name);
@@ -1996,19 +2062,14 @@ class MakeTool {
                     return this.factory.createQualifiedName(res, name);
                 }
             } else {
-                debugger;
-                this.helper.error(
+                throw new IfTsbErrorMessage(
                     IfTsbError.Unsupported,
                     `Unexpected node kind ${ts.SyntaxKind[node.kind]}`
                 );
-                return new ReturnDirect(oriNode);
             }
         };
         const res = get(declNode);
-        if (res === null) {
-            debugger;
-            throw Error("Invalid");
-        } else if (res instanceof ReturnDirect) {
+        if (res instanceof ReturnDirect) {
             return res.node;
         } else {
             return res;
@@ -2111,7 +2172,6 @@ abstract class Importer<T> {
             return GLOBAL;
         } else {
             const importPath = this.helper.parseImportPath(node.name);
-            if (importPath === null) return null;
             const res = this.importFromStringLiteral(importPath);
             if (res === NOIMPORT) return null;
             if (res === null) return null;
@@ -2167,4 +2227,68 @@ class DeclStringImporter extends DeclImporter<string[]> {
     makePropertyAccess(left: string[], right: string): string[] {
         return [...left, right];
     }
+}
+
+class TemplateParams {
+    private parameterNumber = 0;
+    public readonly sourceFileDirAPath: string;
+    constructor(
+        public readonly makeTool: MakeTool,
+        public readonly helper: RefineHelper,
+        public readonly funcName: string,
+        public readonly types: ts.Type[],
+        sourceFileAPath: string
+    ) {
+        this.sourceFileDirAPath = path.dirname(sourceFileAPath);
+    }
+
+    readImportPath() {
+        const mpath = this.helper.makeImportModulePath(this.readString());
+        return this.makeTool.getImportPath(mpath);
+    }
+
+    readString() {
+        this.parameterNumber++;
+        const param = this.types.shift();
+        if (param !== undefined && param.isStringLiteral()) return param.value;
+        throw new IfTsbErrorMessage(
+            IfTsbError.WrongUsage,
+            `${this.funcName} need a string literal at ${this.parameterNumber} parameter`
+        );
+    }
+    readPath() {
+        const filePath = this.readString();
+        if (path.isAbsolute(filePath)) return filePath;
+        return path.resolve(this.sourceFileDirAPath, filePath);
+    }
+    static create(
+        makeTool: MakeTool,
+        helper: RefineHelper,
+        funcName: string,
+        sourceFileAPath: string,
+        typeChecker: ts.TypeChecker,
+        node: {
+            readonly typeArguments?: ts.NodeArray<ts.TypeNode>;
+        }
+    ) {
+        if (node.typeArguments === undefined) return null;
+        return new TemplateParams(
+            makeTool,
+            helper,
+            funcName,
+            node.typeArguments.map((v) => typeChecker.getTypeFromTypeNode(v)),
+            sourceFileAPath
+        );
+    }
+}
+
+class IfTsbErrorMessage {
+    constructor(
+        public readonly code: IfTsbError,
+        public readonly message: string | null
+    ) {}
+}
+
+class ReturnDirect {
+    constructor(public readonly node: ts.Node) {}
 }

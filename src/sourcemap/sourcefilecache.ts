@@ -4,44 +4,23 @@ import path = require("path");
 import { fsp } from "../util/fsp";
 import { memcache } from "../memmgr";
 import { cachedStat } from "../util/cachedstat";
+import { disposeSymbol } from "../util/disposable";
 
-export class SourceFileData {
-    public sourceFile: ts.SourceFile;
+const fileMap = new memcache.Map<string, StringFileData>();
+export class StringFileData implements Disposable {
     public readonly size: number;
-
     constructor(
         public readonly filename: string,
-        public readonly languageVersion: ts.ScriptTarget,
-        contents: string,
+        public contents: string | null,
         private readonly mtime: number
-    ) {
-        if (fsp.verbose) console.log(`createSourceFile ${this.filename}`);
-        const sourceFile = ts.createSourceFile(
-            this.filename,
-            contents,
-            this.languageVersion
-        );
-        this.sourceFile = sourceFile;
-        this.size = contents.length * 2;
+    ) {}
+
+    [Symbol.dispose](): void {
+        memcache.release(this);
     }
 
-    static loadSync(
-        filename: string,
-        languageVersion: ts.ScriptTarget
-    ): SourceFileData {
-        const contents = fs.readFileSync(filename, "utf8");
-        const mtime = cachedStat.mtimeSync(filename);
-        return new SourceFileData(filename, languageVersion, contents, mtime);
-    }
-    static async load(
-        filename: string,
-        languageVersion: ts.ScriptTarget
-    ): Promise<SourceFileData> {
-        const [contents, mtime] = await Promise.all([
-            fsp.readFile(filename),
-            cachedStat.mtime(filename),
-        ]);
-        return new SourceFileData(filename, languageVersion, contents, mtime);
+    clear() {
+        this.contents = null;
     }
 
     async isModified(): Promise<boolean> {
@@ -54,16 +33,42 @@ export class SourceFileData {
         return mtime !== this.mtime;
     }
 
-    clear(): void {
-        this.sourceFile = null as any;
+    static take(filename: string): StringFileData {
+        return fileMap.takeOrCreate(filename, () => {
+            const contents = fs.readFileSync(filename, "utf8");
+            const mtime = cachedStat.mtimeSync(filename);
+            return new StringFileData(filename, contents, mtime);
+        });
+    }
+}
+
+export class SourceFileData {
+    public sourceFile: ts.SourceFile | null;
+    public readonly size: number;
+    constructor(
+        public readonly file: StringFileData,
+        public readonly languageVersion: ts.ScriptTarget
+    ) {
+        if (fsp.verbose) console.log(`createSourceFile ${this.file.filename}`);
+        this.size = file.size;
+        this.sourceFile = ts.createSourceFile(
+            this.file.filename,
+            file.contents!,
+            this.languageVersion
+        );
     }
 
-    release(): void {
+    clear(): void {
+        this.sourceFile = null;
+    }
+
+    [disposeSymbol]() {
         memcache.release(this);
     }
 }
 
 const all = new Map<ts.ScriptTarget, SourceFileCache>();
+
 export class SourceFileCache {
     private readonly map = new memcache.Map<string, SourceFileData>();
 
@@ -71,9 +76,11 @@ export class SourceFileCache {
 
     take(filename: string): SourceFileData {
         const apath = path.join(filename);
-        return this.map.takeOrCreate(apath, () =>
-            SourceFileData.loadSync(apath, this.languageVersion)
-        );
+        return this.map.takeOrCreate(apath, () => {
+            using raw = StringFileData.take(filename);
+            const out = new SourceFileData(raw, this.languageVersion);
+            return out;
+        });
     }
 
     static getInstance(languageVersion: ts.ScriptTarget): SourceFileCache {

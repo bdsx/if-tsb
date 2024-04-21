@@ -6,3 +6,5 @@ export declare function reflect<
     P3 = undefined,
     P4 = undefined
 >(): any;
+
+export declare function importRaw<SOURCE extends string>(): string;

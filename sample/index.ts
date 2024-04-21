@@ -3,6 +3,7 @@ import value2 = require("./moduleexport2");
 import "./declaremodule";
 import "./jsfile";
 import * as fs from "fs/promises";
+import { importRaw } from "../reflect";
 require("arg");
 
 export let x = 0;
@@ -21,3 +22,5 @@ export type TypesType = A | Test2;
 export let c: A = {};
 
 export class Test2 {}
+
+export const text = importRaw<"./text.txt">();
