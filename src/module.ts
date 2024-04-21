@@ -738,14 +738,23 @@ export class BundlerModule {
                                             }
                                             case "importRaw": {
                                                 if (tparams == null) break;
-                                                const path = tparams.readPath();
+                                                const fileImportName = tparams.readString();
+                                                const filePath = tparams.stringToPath(fileImportName);
 
-                                                const file =
-                                                    StringFileData.take(path);
-                                                refs.append(file);
-                                                return ctx.factory.createStringLiteral(
-                                                    file.contents!
-                                                );
+                                                try {
+                                                    const file = StringFileData.take(filePath);
+                                                    refs.append(file);
+                                                    return ctx.factory.createStringLiteral(
+                                                        file.contents!
+                                                    );
+                                                } catch (err) {
+                                                    if (err.code === 'ENOENT') {
+                                                            throw new IfTsbErrorMessage(IfTsbError.ModuleNotFound,
+                                                                `Cannot find file '${fileImportName}'`);
+                                                    } else {
+                                                        throw err;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -2257,7 +2266,9 @@ class TemplateParams {
         );
     }
     readPath() {
-        const filePath = this.readString();
+        return this.stringToPath(this.readString());
+    }
+    stringToPath(filePath:string) {
         if (path.isAbsolute(filePath)) return filePath;
         return path.resolve(this.sourceFileDirAPath, filePath);
     }

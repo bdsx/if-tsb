@@ -59,23 +59,18 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "hepims",
+            "name": "start",
             "skipFiles": ["<node_internals>/**"],
             "runtimeArgs": [
                 "--nolazy",
                 "-r",
                 "ts-node/register/transpile-only"
             ],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../hepims", "-w"],
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "cbtppms",
-            "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../cbtppms", "-w"],
+            "args": [
+                "${workspaceFolder}\\src\\cli.ts",
+                "../../rust/start",
+                "-w"
+            ],
             "console": "integratedTerminal"
         }
     ]
