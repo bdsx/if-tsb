@@ -529,12 +529,8 @@ export class BundlerModule {
 
         function getSourceFile(filepath: string): ts.SourceFile {
             const fileName = filepath.replace(/\\/g, "/");
-            let data = bundler.sourceFileCache.take(fileName);
+            const data = bundler.sourceFileCache.take(fileName);
             refs.append(data);
-            if (data.file.isModifiedSync()) {
-                memcache.expire(data);
-                data = bundler.sourceFileCache.take(fileName);
-            }
             return data.sourceFile!;
         }
 
@@ -739,10 +735,10 @@ export class BundlerModule {
                                             case "importRaw": {
                                                 if (tparams == null) break;
                                                 const fileImportName = tparams.readString();
-                                                const filePath = tparams.stringToPath(fileImportName);
+                                                const fileAPath = tparams.stringToPath(fileImportName);
 
                                                 try {
-                                                    const file = StringFileData.take(filePath);
+                                                    const file = StringFileData.take(fileAPath);
                                                     refs.append(file);
                                                     return ctx.factory.createStringLiteral(
                                                         file.contents!
@@ -2269,7 +2265,7 @@ class TemplateParams {
         return this.stringToPath(this.readString());
     }
     stringToPath(filePath:string) {
-        if (path.isAbsolute(filePath)) return filePath;
+        if (path.isAbsolute(filePath)) return path.resolve(filePath);
         return path.resolve(this.sourceFileDirAPath, filePath);
     }
     static create(

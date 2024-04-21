@@ -12,7 +12,7 @@ export class StringFileData implements Disposable {
     constructor(
         public readonly filename: string,
         public contents: string | null,
-        private readonly mtime: number
+        private readonly mtime: number,
     ) {}
 
     [Symbol.dispose](): void {
@@ -33,12 +33,16 @@ export class StringFileData implements Disposable {
         return mtime !== this.mtime;
     }
 
-    static take(filename: string): StringFileData {
-        return fileMap.takeOrCreate(filename, () => {
-            const contents = fs.readFileSync(filename, "utf8");
-            const mtime = cachedStat.mtimeSync(filename);
-            return new StringFileData(filename, contents, mtime);
-        });
+    static take(apath: string): StringFileData {
+        return fileMap.createIfModified(
+            apath,
+            (file) => file.isModifiedSync(),
+            () => {
+                const contents = fs.readFileSync(apath, "utf8");
+                const mtime = cachedStat.mtimeSync(apath);
+                return new StringFileData(apath, contents, mtime);
+            },
+        );
     }
 }
 
@@ -47,14 +51,14 @@ export class SourceFileData {
     public readonly size: number;
     constructor(
         public readonly file: StringFileData,
-        public readonly languageVersion: ts.ScriptTarget
+        public readonly languageVersion: ts.ScriptTarget,
     ) {
         if (fsp.verbose) console.log(`createSourceFile ${this.file.filename}`);
         this.size = file.size;
         this.sourceFile = ts.createSourceFile(
             this.file.filename,
             file.contents!,
-            this.languageVersion
+            this.languageVersion,
         );
     }
 
@@ -76,11 +80,12 @@ export class SourceFileCache {
 
     take(filename: string): SourceFileData {
         const apath = path.join(filename);
-        return this.map.takeOrCreate(apath, () => {
-            using raw = StringFileData.take(filename);
-            const out = new SourceFileData(raw, this.languageVersion);
-            return out;
-        });
+        using file = StringFileData.take(apath);
+        return this.map.createIfModified(
+            apath,
+            (data) => data.file !== file,
+            () => new SourceFileData(file, this.languageVersion),
+        );
     }
 
     static getInstance(languageVersion: ts.ScriptTarget): SourceFileCache {
@@ -88,7 +93,7 @@ export class SourceFileCache {
         if (cache == null) {
             all.set(
                 languageVersion,
-                (cache = new SourceFileCache(languageVersion))
+                (cache = new SourceFileCache(languageVersion)),
             );
         }
         return cache;
