@@ -19,7 +19,7 @@ export { TsConfig };
 
 export async function bundle(
     entries?: string[] | null,
-    output?: string | null | TsConfig
+    output?: string | null | TsConfig,
 ): Promise<number> {
     if (entries == null) entries = ["."];
     const started = process.hrtime();
@@ -80,8 +80,8 @@ export namespace bundle {
             console.error(
                 ts.formatDiagnosticsWithColorAndContext(
                     [configFile.error],
-                    tshelper.defaultFormatHost
-                )
+                    tshelper.defaultFormatHost,
+                ),
             );
         }
         return configFile.config as TsConfig;
@@ -89,7 +89,7 @@ export namespace bundle {
     export function watch(
         entries?: string[] | null,
         output?: string | TsConfig | null,
-        opts: tshelper.PhaseListener = {}
+        opts: tshelper.PhaseListener = {},
     ): void {
         if (entries == null) entries = ["."];
         (async () => {
@@ -133,11 +133,10 @@ export namespace bundle {
                     for (const tsconfigPath of reloads) {
                         for (const bundler of ctx.makeBundlersWithPath(
                             tsconfigPath,
-                            output
+                            output,
                         )) {
-                            const res = await bundler.bundle(
-                                printTimePerOutput
-                            );
+                            const res =
+                                await bundler.bundle(printTimePerOutput);
                             bundler.clear();
                             watcher.reset(bundler, res.deplist);
                         }
@@ -145,7 +144,7 @@ export namespace bundle {
                 }
 
                 console.log(
-                    `[${time()}] ${ctx.getErrorCountString()}. Watching for file changes.`
+                    `[${time()}] ${ctx.getErrorCountString()}. Watching for file changes.`,
                 );
                 console.log(`[${time()}] ${millisecondFrom(started)}ms`);
                 cachedStat.clear();
@@ -189,15 +188,15 @@ export namespace bundle {
                         if (console.clear != null) console.clear();
                         else
                             console.log(
-                                `node@${process.version} does not support console.clear`
+                                `node@${process.version} does not support console.clear`,
                             );
                     }
                     if (opts.onStart != null) opts.onStart();
                     console.log(
-                        `[${time()}] File change detected. Starting incremental compilation...`
+                        `[${time()}] File change detected. Starting incremental compilation...`,
                     );
                     bundle([...list]);
-                }
+                },
             );
             if (opts.onStart != null) opts.onStart();
             console.log(`[${time()}] Starting compilation in watch mode...`);
@@ -228,7 +227,7 @@ export function tscompile(
     tsconfig: TsConfig,
     basedir: string = ".",
     watch?: boolean,
-    opts: tshelper.PhaseListener & { noWorker?: boolean } = {}
+    opts: tshelper.PhaseListener & { noWorker?: boolean } = {},
 ): Promise<void> {
     try {
         if (opts.noWorker) throw 0;
@@ -243,7 +242,7 @@ export function tscompile(
                     basedir,
                     watch,
                 },
-            }
+            },
         );
         if (watch) {
             worker.on("message", (message) => {

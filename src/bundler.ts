@@ -35,6 +35,7 @@ import {
 } from "./util/util";
 import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
+import { stripRawProtocol } from "./util/rawprotocol";
 
 const libmap = new Map<string, Bundler>();
 
@@ -101,7 +102,7 @@ export class Bundler {
         public readonly files: string[],
         public readonly tsconfig: string | null,
         public readonly tsoptions: ts.CompilerOptions,
-        public readonly tsconfigOriginal: any
+        public readonly tsconfigOriginal: any,
     ) {
         for (const reservedName of reservedModuleNames) {
             this.names.set(reservedName, null);
@@ -111,7 +112,7 @@ export class Bundler {
             main.reportMessage(
                 IfTsbError.Unsupported,
                 "noEmitOnError is ignored by if-tsb",
-                true
+                true,
             );
         }
         tsoptions.noEmitOnError = false;
@@ -271,8 +272,8 @@ export class Bundler {
                             this.exportVarName = exportRule;
                             console.error(
                                 colors.red(
-                                    `if-tsb: Unsupported module type: ${boptions.module}, it treats as a direct export`
-                                )
+                                    `if-tsb: Unsupported module type: ${boptions.module}, it treats as a direct export`,
+                                ),
                             );
                             break;
                     }
@@ -286,7 +287,7 @@ export class Bundler {
                 if (boptions.globalModuleVarName) {
                     main.reportMessage(
                         IfTsbError.Unsupported,
-                        "ignored globalModuleVarName with exportLib to variable"
+                        "ignored globalModuleVarName with exportLib to variable",
                     );
                 }
                 this.globalVarName = this.exportVarName!;
@@ -299,7 +300,7 @@ export class Bundler {
         }
 
         this.moduleResolutionCache = tshelper.createModuleResolutionCache(
-            this.basedir
+            this.basedir,
         );
         if (entry !== null) {
             const apath = this.resolvePath(entry);
@@ -311,7 +312,7 @@ export class Bundler {
         }
         this.taskQueue = new ConcurrencyQueue(
             path.basename(this.entryApath || this.basedir) + " Task",
-            Number(boptions.concurrency) || undefined
+            Number(boptions.concurrency) || undefined,
         );
         if (this.verbose) {
             fsp.verbose = true;
@@ -330,7 +331,7 @@ export class Bundler {
                 this.main.reportMessage(
                     IfTsbError.WrongUsage,
                     "browser=true ignores the bundleExternals option",
-                    true
+                    true,
                 );
             }
         }
@@ -356,7 +357,7 @@ export class Bundler {
             if (id.number < 0 && id.number !== mode) {
                 this.main.reportMessage(
                     IfTsbError.InternalError,
-                    `module type mismatch (${id.number} -> ${mode})`
+                    `module type mismatch (${id.number} -> ${mode})`,
                 );
             }
         }
@@ -385,7 +386,7 @@ export class Bundler {
     allocModuleVarName(
         number: number,
         name: string,
-        apath: string
+        apath: string,
     ): BundlerModuleId {
         name = this.names.getFreeName(name);
         const moduleId = new BundlerModuleId(number, name, apath);
@@ -415,8 +416,8 @@ export class Bundler {
         if (printOutputTime) {
             console.log(
                 `[${time()}] output ${this.output} (${millisecondFrom(
-                    started
-                )}ms)`
+                    started,
+                )}ms)`,
             );
         }
 
@@ -470,19 +471,25 @@ export class Bundler {
 
 async function bundlingProcess(
     bundler: Bundler,
-    result: BundleResult
+    result: BundleResult,
 ): Promise<void> {
     class DepList {
         private deplistPromise: Promise<void> = Promise.resolve();
 
         add(filename: string): void {
+            filename = stripRawProtocol(filename);
+
             result.deplist.push(filename);
         }
         addIfExists(filename: string): void {
+            filename = stripRawProtocol(filename);
+
             this.deplistPromise = this.deplistPromise
                 .then(() => cachedStat.exists(filename))
                 .then((exists) => {
-                    if (exists) result.deplist.push(filename);
+                    if (exists) {
+                        result.deplist.push(filename);
+                    }
                 });
         }
     }
@@ -540,7 +547,7 @@ async function bundlingProcess(
                 const mpath = info.mpath;
                 const childModule = bundler.getModule(
                     info.apathOrExternalMode,
-                    mpath
+                    mpath,
                 );
                 if (info.declaration) childModule.needDeclaration = true;
                 children.push({
@@ -592,7 +599,7 @@ async function bundlingProcess(
         const parents: BundlerModule[] = [];
         function checkModuleDep(
             m: BundlerModule,
-            importLine: ErrorPosition | null
+            importLine: ErrorPosition | null,
         ): void {
             if (m.checkState === CheckState.Checked) return;
             if (m.checkState === CheckState.Entered) {
@@ -604,7 +611,7 @@ async function bundlingProcess(
                     importLine,
                     1005,
                     "Circular dependency " +
-                        looping.map((m) => colors.yellow(m.rpath)).join(" → ")
+                        looping.map((m) => colors.yellow(m.rpath)).join(" → "),
                 );
                 return;
             }
@@ -630,7 +637,7 @@ async function bundlingProcess(
 
     async function writeAndRelease(
         module: BundlerModule,
-        refined: RefinedModule
+        refined: RefinedModule,
     ) {
         if (refined.content === null) {
             throw Error(`${refined.id.apath}: no content`);
@@ -641,7 +648,7 @@ async function bundlingProcess(
             module.needDeclaration &&
                 refined.declaration !== null &&
                 dtsWriter !== null &&
-                dtsWriter.write(refined.declaration)
+                dtsWriter.write(refined.declaration),
         );
 
         const offset = sourceMapLineOffset + refined.sourceMapOutputLineOffset;
@@ -655,7 +662,7 @@ async function bundlingProcess(
                     IfTsbError.InternalError,
                     `Invalid source map, ${
                         err.message
-                    } (${refined.sourceMapText.substr(0, 16)})`
+                    } (${refined.sourceMapText.substr(0, 16)})`,
                 );
             }
         }
@@ -680,20 +687,13 @@ async function bundlingProcess(
     const writeWorker = new AsyncWorker<[BundlerModule, RefinedModule | null]>(
         async ([module, refined]) => {
             if (refined === null) {
-                if (!module.bundler.suppressModuleNotFoundErrors) {
-                    module.error(
-                        null,
-                        IfTsbError.ModuleNotFound,
-                        `Cannot find module '${module.mpath}'. refine failed.`
-                    );
-                }
                 await jsWriter.write(
-                    `${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); },\n`
+                    `${module.id.varName}(){ throw Error("Cannot find module '${module.mpath}'"); },\n`,
                 );
             } else {
                 await writeAndRelease(module, refined);
             }
-        }
+        },
     );
 
     const refineWorker = new AsyncWorker<
@@ -720,7 +720,7 @@ async function bundlingProcess(
         if (!(await cachedStat.exists(bundler.entryApath))) {
             bundler.main.reportMessage(
                 IfTsbError.ModuleNotFound,
-                `Cannot find entry module '${entryModule.rpath}'`
+                `Cannot find entry module '${entryModule.rpath}'`,
             );
             return;
         }
@@ -759,22 +759,22 @@ async function bundlingProcess(
             if (bundler.exportLib) {
                 if (bundler.exportRule === ExportRule.ES2015) {
                     await jsWriter.write(
-                        `export const ${bundler.globalVarName} = {\n`
+                        `export const ${bundler.globalVarName} = {\n`,
                     );
                     sourceMapLineOffset++;
                 } else if (bundler.exportRule === ExportRule.Direct) {
                     await jsWriter.write(
-                        `${bundler.exportVarName}.${bundler.globalVarName} = {\n`
+                        `${bundler.exportVarName}.${bundler.globalVarName} = {\n`,
                     );
                     sourceMapLineOffset++;
                 } else if (bundler.exportRule === ExportRule.Var) {
                     await jsWriter.write(
-                        `${bundler.exportVarKeyword} ${bundler.globalVarName} = {\n`
+                        `${bundler.exportVarKeyword} ${bundler.globalVarName} = {\n`,
                     );
                     sourceMapLineOffset++;
                 } else {
                     await jsWriter.write(
-                        `${bundler.constKeyword} ${bundler.globalVarName} = {\n`
+                        `${bundler.constKeyword} ${bundler.globalVarName} = {\n`,
                     );
                     sourceMapLineOffset++;
                 }
@@ -794,7 +794,7 @@ async function bundlingProcess(
                     sourceMapLineOffset++;
                 }
                 await jsWriter.write(
-                    `${bundler.constKeyword} ${bundler.globalVarName} = {\n`
+                    `${bundler.constKeyword} ${bundler.globalVarName} = {\n`,
                 );
                 sourceMapLineOffset++;
             }
@@ -804,36 +804,36 @@ async function bundlingProcess(
             if (bundler.exportLib) {
                 if (bundler.exportRule === ExportRule.ES2015) {
                     await dtsWriter.write(
-                        `export namespace ${bundler.globalVarName} {\n`
+                        `export namespace ${bundler.globalVarName} {\n`,
                     );
                 } else if (bundler.exportRule === ExportRule.Direct) {
                     await dtsWriter.write(
-                        `declare namespace ${bundler.globalVarName} {\n`
+                        `declare namespace ${bundler.globalVarName} {\n`,
                     );
                 } else if (bundler.exportRule === ExportRule.Var) {
                     await dtsWriter.write(
-                        `declare global {\nnamespace ${bundler.globalVarName} {\n`
+                        `declare global {\nnamespace ${bundler.globalVarName} {\n`,
                     );
                 } else {
                     await dtsWriter.write(
-                        `declare namespace ${bundler.globalVarName} {\n`
+                        `declare namespace ${bundler.globalVarName} {\n`,
                     );
                 }
             } else {
                 if (bundler.needWrap) {
                     if (bundler.exportRule === ExportRule.Var) {
                         await dtsWriter.write(
-                            `declare global {\nnamespace ${bundler.exportVarName} {\n`
+                            `declare global {\nnamespace ${bundler.exportVarName} {\n`,
                         );
                     } else {
                         // no declaration
                     }
                 }
                 await dtsWriter.write(
-                    `declare namespace ${bundler.globalVarName} {\n`
+                    `declare namespace ${bundler.globalVarName} {\n`,
                 );
             }
-        }
+        },
     );
 
     const mapgen = bundler.noSourceMapWorker
@@ -876,7 +876,7 @@ async function bundlingProcess(
     await concurrent(async () => {
         for (const module of bundler.jsPreloadModules) {
             await jsWriter.write(
-                `${module.varName}:require('${module.apath}'),\n`
+                `${module.varName}:require('${module.apath}'),\n`,
             );
             sourceMapLineOffset++;
         }
@@ -890,12 +890,12 @@ async function bundlingProcess(
             if (bundler.browserAPathRoot !== null) {
                 await jsWriter.write(`return this.__dirname+'/'+rpath;\n},\n`);
                 await jsWriter.write(
-                    `__dirname:location.href.substring(0,location.href.lastIndexOf('/')),\n`
+                    `__dirname:location.href.substring(0,location.href.lastIndexOf('/')),\n`,
                 );
             } else {
                 const path = bundler.idmap.get("path")!;
                 await jsWriter.write(
-                    `return this.${path.varName}.join(this.__dirname, rpath);\n},\n`
+                    `return this.${path.varName}.join(this.__dirname, rpath);\n},\n`,
                 );
                 if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
                     await jsWriter.write(`__dirname,\n`);
@@ -931,7 +931,7 @@ async function bundlingProcess(
             await jsWriter.write("\n");
             if (entryModuleIsAccessed) {
                 await jsWriter.write(
-                    `${bundler.globalVarName}.entry=module.exports;\n`
+                    `${bundler.globalVarName}.entry=module.exports;\n`,
                 );
             }
             if (bundler.needWrap) {
@@ -953,7 +953,7 @@ async function bundlingProcess(
                 switch (bundler.exportRule) {
                     case ExportRule.CommonJS:
                         await jsWriter.write(
-                            `module.exports = ${bundler.globalVarName};\n`
+                            `module.exports = ${bundler.globalVarName};\n`,
                         );
                         break;
                 }
@@ -964,7 +964,7 @@ async function bundlingProcess(
             await dtsWriter.write("}\n");
             for (const module of bundler.dtsPreloadModules) {
                 await dtsWriter.write(
-                    `import ${bundler.globalVarName}_${module.varName} = require('${module.apath}');\n`
+                    `import ${bundler.globalVarName}_${module.varName} = require('${module.apath}');\n`,
                 );
                 sourceMapLineOffset++;
             }
@@ -976,10 +976,10 @@ async function bundlingProcess(
                 await dtsWriter.write(
                     `export = ${bundler.globalVarName}.${
                         entryModule!.id.varName
-                    };\n`
+                    };\n`,
                 );
             }
-        }
+        },
     );
 
     if (bundler.tsoptions.sourceMap) {
@@ -994,9 +994,9 @@ async function bundlingProcess(
                 writingJs.then(() =>
                     jsWriter.write(
                         `//# sourceMappingURL=${path.basename(
-                            bundler.output
-                        )}.map`
-                    )
+                            bundler.output,
+                        )}.map`,
+                    ),
                 ),
                 mapgen.save(),
             ]);

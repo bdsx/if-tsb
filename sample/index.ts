@@ -24,3 +24,5 @@ export let c: A = {};
 export class Test2 {}
 
 export const text = importRaw<"./text.txt">();
+
+export const text2 = importRaw("./text.txt");
