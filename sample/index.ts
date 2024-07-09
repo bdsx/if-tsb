@@ -6,8 +6,11 @@ import * as fs from "fs/promises";
 require("arg");
 
 export let x = 0;
+import type json = require("./json.json");
 
 fs.readFile("");
+
+export type out = typeof json;
 
 let b: number = value.v;
 console.log(value2);

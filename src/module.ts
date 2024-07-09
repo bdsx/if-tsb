@@ -1154,7 +1154,6 @@ export class BundlerModule {
         };
 
         let sourceMapText: string | null = null;
-        let declaration: string | null = null as any;
         let stricted = false;
         const allowedSources = new Set<string>();
         allowedSources.add(moduleAPath);
@@ -1195,26 +1194,20 @@ export class BundlerModule {
                 content += `\nreturn ${bundler.globalVarName}.${refined.id.varName}.exports=${sourceFile.text};\n},\n`;
             }
             if (this.needDeclaration) {
-                declaration = `// ${this.rpath}\n`;
+                let decltext = `// ${this.rpath}\n`;
                 if (this.isEntry) {
+                    decltext += `(`;
+                    decltext += sourceFile.text.trim();
+                    decltext += ");\n";
                 } else {
-                    if (exportEquals) {
-                        declaration += `const ${refined.id.varName}_module:`;
-                    } else {
-                        declaration += `export const ${refined.id.varName}:`;
-                    }
+                    decltext += `export const ${refined.id.varName}:`;
+                    decltext += sourceFile.text.trim();
+                    decltext += ";\n";
                 }
-                declaration += sourceFile.text;
-                declaration += ";\n";
-                if (this.isEntry) {
-                } else {
-                    declaration += `}\n`;
-                    if (exportEquals) {
-                        declaration += `export const ${refined.id.varName} = ${refined.id.varName}_module;\n`;
-                    }
-                }
+                refined.declaration = Buffer.from(decltext);
             }
         } else {
+            let declaration: string | null = null as any;
             let pureContent = "";
             const filePathForTesting = moduleAPath.replace(/\\/g, "/");
             const superHost = bundler.compilerHost;
@@ -1304,6 +1297,7 @@ export class BundlerModule {
                         sourceMtime
                     ).toLocaleTimeString()}`
                 );
+
             const res = bundler.program.emit(
                 sourceFile,
                 undefined,
@@ -1926,9 +1920,6 @@ class MakeTool {
                 }
             }
         }
-        class ReturnDirect {
-            constructor(public readonly node: ts.Node) {}
-        }
         const moduleAPath = this.module.id.apath.replace(/\\/g, "/");
         const get = (node: ts.Node): ts.EntityName | ReturnDirect | null => {
             let name: string | null;
@@ -2186,4 +2177,8 @@ class DeclStringImporter extends DeclImporter<string[]> {
     makePropertyAccess(left: string[], right: string): string[] {
         return [...left, right];
     }
+}
+
+class ReturnDirect {
+    constructor(public readonly node: ts.Node) {}
 }

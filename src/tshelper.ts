@@ -177,7 +177,7 @@ export namespace tshelper {
             const name = getNodeKindName(node);
             console.log(`${indent}${branch}[ ${name} (${node.kind}) ]`);
             indent += line;
-            const children = node.getChildren(sourceFile);
+            const children = node.getChildren(sourceFile).slice();
             const last = children.pop();
             if (last !== undefined) {
                 for (const child of children) {
