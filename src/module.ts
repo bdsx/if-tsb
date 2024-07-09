@@ -1069,16 +1069,26 @@ export class BundlerModule {
                                             visitAbsoluting(res.importPath),
                                             ctx,
                                         );
-                                        moduleDeclaration +=
-                                            "export namespace ";
-                                        moduleDeclaration +=
-                                            res.moduleId.varName;
-                                        moduleDeclaration += printer.printNode(
+                                        const declContent = printer.printNode(
                                             ts.EmitHint.Unspecified,
                                             visited.body!,
                                             sourceFile,
                                         );
-                                        moduleDeclaration += "\n";
+                                        if (
+                                            res.module.isEntry &&
+                                            bundler.exportRule ===
+                                                ExportRule.Var
+                                        ) {
+                                            globalDeclaration +=
+                                                "declare global {\n";
+                                            globalDeclaration += `namespace ${bundler.exportVarName}`;
+                                            globalDeclaration += declContent;
+                                            globalDeclaration += "\n}\n";
+                                        } else {
+                                            moduleDeclaration += `export namespace ${res.moduleId.varName}`;
+                                            moduleDeclaration += declContent;
+                                            moduleDeclaration += "\n";
+                                        }
                                     }
                                     return undefined;
                                 }
@@ -1704,30 +1714,44 @@ export class BundlerModule {
 
                 // declaration
                 let decltext = "";
+                const needToUnwrapModule =
+                    this.isEntry && bundler.exportRule === ExportRule.Var;
                 if (declaration !== null) {
                     const stripper = new LineStripper(declaration);
                     stripper.strip((line) => line.startsWith("#"));
 
                     decltext = `// ${this.rpath}\n`;
-                    if (exportEquals) {
-                        decltext += `namespace ${refined.id.varName}_module {\n`;
-                    } else {
-                        decltext += `export namespace ${refined.id.varName} {\n`;
+                    if (!needToUnwrapModule) {
+                        if (exportEquals) {
+                            decltext += `namespace ${refined.id.varName}_module {\n`;
+                        } else {
+                            decltext += `export namespace ${refined.id.varName} {\n`;
+                        }
                     }
                     decltext += stripper.strippedComments;
                     decltext += declaration.substring(stripper.index);
-                    decltext += "\n}\n";
-                    if (exportEquals) {
-                        decltext += `export import ${refined.id.varName} = ${refined.id.varName}_module._exported\n`;
+                    decltext += "\n";
+                    if (!needToUnwrapModule) {
+                        decltext += "}\n";
+                    }
+                    if (this.isEntry) {
+                    } else {
+                        if (exportEquals) {
+                            decltext += `export import ${refined.id.varName} = ${refined.id.varName}_module._exported\n`;
+                        }
                     }
                 } else if (this.needDeclaration) {
                     const errormsg = `'${this.mpath}.d.ts' is not emitted`;
                     this.error(null, IfTsbError.ModuleNotFound, errormsg);
                     refined.errored = true;
                     decltext = `// ${this.rpath}\n`;
-                    decltext += `export namespace ${refined.id.varName} {\n`;
+                    if (!needToUnwrapModule) {
+                        decltext += `export namespace ${refined.id.varName} {\n`;
+                    }
                     decltext += `// ${errormsg}\n`;
-                    decltext += `}\n`;
+                    if (!needToUnwrapModule) {
+                        decltext += `}\n`;
+                    }
                 }
                 if (moduleDeclaration !== "") {
                     decltext += moduleDeclaration;

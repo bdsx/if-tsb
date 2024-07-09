@@ -817,15 +817,6 @@ async function bundlingProcess(
                     );
                 }
             } else {
-                if (bundler.needWrap) {
-                    if (bundler.exportRule === ExportRule.Var) {
-                        await dtsWriter.write(
-                            `declare global {\nnamespace ${bundler.exportVarName} {\n`,
-                        );
-                    } else {
-                        // no declaration
-                    }
-                }
                 await dtsWriter.write(
                     `declare namespace ${bundler.globalVarName} {\n`,
                 );
@@ -870,51 +861,64 @@ async function bundlingProcess(
     await writeWorker.end();
 
     // ending
-    await concurrent(async () => {
-        for (const module of bundler.jsPreloadModules) {
-            await jsWriter.write(
-                `${module.varName}:require('${module.apath}'),\n`,
-            );
-            sourceMapLineOffset++;
-        }
-
-        if (bundler.idmap.get("__resolve")?.isAppended) {
-            if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
-                await jsWriter.write(`__resolve(rpath){\n`);
-            } else {
-                await jsWriter.write(`__resolve:function(rpath){\n`);
+    await concurrent(
+        async () => {
+            for (const module of bundler.jsPreloadModules) {
+                await jsWriter.write(
+                    `${module.varName}:require('${module.apath}'),\n`,
+                );
+                sourceMapLineOffset++;
             }
-            if (bundler.browserAPathRoot !== null) {
-                await jsWriter.write(`return this.__dirname+'/'+rpath;\n},\n`);
-                await jsWriter.write(
-                    `__dirname:location.href.substring(0,location.href.lastIndexOf('/')),\n`,
-                );
-            } else {
-                const path = bundler.idmap.get("path")!;
-                await jsWriter.write(
-                    `return this.${path.varName}.join(this.__dirname, rpath);\n},\n`,
-                );
+
+            if (bundler.idmap.get("__resolve")?.isAppended) {
                 if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
-                    await jsWriter.write(`__dirname,\n`);
+                    await jsWriter.write(`__resolve(rpath){\n`);
                 } else {
-                    await jsWriter.write(`__dirname:__dirname,\n`);
+                    await jsWriter.write(`__resolve:function(rpath){\n`);
                 }
+                if (bundler.browserAPathRoot !== null) {
+                    await jsWriter.write(
+                        `return this.__dirname+'/'+rpath;\n},\n`,
+                    );
+                    await jsWriter.write(
+                        `__dirname:location.href.substring(0,location.href.lastIndexOf('/')),\n`,
+                    );
+                } else {
+                    const path = bundler.idmap.get("path")!;
+                    await jsWriter.write(
+                        `return this.${path.varName}.join(this.__dirname, rpath);\n},\n`,
+                    );
+                    if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
+                        await jsWriter.write(`__dirname,\n`);
+                    } else {
+                        await jsWriter.write(`__dirname:__dirname,\n`);
+                    }
+                }
+                sourceMapLineOffset += 4;
             }
-            sourceMapLineOffset += 4;
-        }
 
-        if (entryModuleIsAccessed) {
-            await jsWriter.write(`entry:${bundler.exportVarName}\n};\n`);
-            sourceMapLineOffset += 2;
-        } else {
-            if (bundler.tsoptions.target! < ts.ScriptTarget.ES5) {
-                await jsWriter.write(`_:null\n};\n`);
+            if (entryModuleIsAccessed) {
+                await jsWriter.write(`entry:${bundler.exportVarName}\n};\n`);
+                sourceMapLineOffset += 2;
             } else {
-                await jsWriter.write(`};\n`);
+                if (bundler.tsoptions.target! < ts.ScriptTarget.ES5) {
+                    await jsWriter.write(`_:null\n};\n`);
+                } else {
+                    await jsWriter.write(`};\n`);
+                }
+                sourceMapLineOffset++;
             }
-            sourceMapLineOffset++;
-        }
-    });
+        },
+        async () => {
+            if (dtsWriter === null) return;
+            await dtsWriter.write("}\n");
+            if (bundler.exportRule === ExportRule.Var) {
+                await dtsWriter.write(
+                    `declare global {\nnamespace ${bundler.exportVarName} {\n`,
+                );
+            }
+        },
+    );
 
     // end with the entry module for es6 module
     if (entryModule !== null) {
@@ -958,7 +962,11 @@ async function bundlingProcess(
         },
         async () => {
             if (dtsWriter === null) return;
-            await dtsWriter.write("}\n");
+            if (bundler.exportRule !== ExportRule.Var) {
+                await dtsWriter.write("}\n");
+            } else {
+                await dtsWriter.write(`}\n}\n`);
+            }
             for (const module of bundler.dtsPreloadModules) {
                 let modulePath: string;
                 if (path.isAbsolute(module.apath)) {
@@ -980,11 +988,15 @@ async function bundlingProcess(
             }
             globalDeclarationModules.length = 0;
             if (entryModule !== null) {
-                await dtsWriter.write(
-                    `export = ${bundler.globalVarName}.${
-                        entryModule!.id.varName
-                    };\n`,
-                );
+                if (bundler.needWrap) {
+                    await dtsWriter.write(`export {};\n`);
+                } else {
+                    await dtsWriter.write(
+                        `export = ${bundler.globalVarName}.${
+                            entryModule!.id.varName
+                        };\n`,
+                    );
+                }
             }
         },
     );

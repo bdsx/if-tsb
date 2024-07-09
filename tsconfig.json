@@ -16,10 +16,9 @@
                 "wrapBegin": "//test - begin\n",
                 "wrapEnd": "\n//test - end\n",
                 "externals": ["**/externals/**"],
-                "module": "ES6"
+                "module": "var out"
             },
             "compilerOptions": {
-                "module": "ES6",
                 "declaration": true
             }
         }
