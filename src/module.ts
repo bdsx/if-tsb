@@ -1311,6 +1311,7 @@ export class BundlerModule {
                 refined.declaration = Buffer.from(decltext);
             }
         } else {
+            let declaration:string|null = null;
             let pureContent = "";
             const filePathForTesting = moduleAPath.replace(/\\/g, "/");
             const superHost = bundler.compilerHost;
