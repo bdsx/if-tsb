@@ -9,7 +9,11 @@
             "request": "launch",
             "name": "Bundle Self",
             "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+            "runtimeArgs": [
+                "--nolazy",
+                "-r",
+                "ts-node/register/transpile-only"
+            ],
             "args": ["${workspaceFolder}\\src\\cli.ts", ".", "-w"],
             "console": "integratedTerminal"
         },
@@ -18,7 +22,11 @@
             "request": "launch",
             "name": "Bundle ftp-kr",
             "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+            "runtimeArgs": [
+                "--nolazy",
+                "-r",
+                "ts-node/register/transpile-only"
+            ],
             "args": ["${workspaceFolder}\\src\\cli.ts", "../ftp-kr", "-w"],
             "console": "integratedTerminal"
         },
@@ -27,39 +35,42 @@
             "request": "launch",
             "name": "PEGen",
             "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+            "runtimeArgs": [
+                "--nolazy",
+                "-r",
+                "ts-node/register/transpile-only"
+            ],
             "args": ["${workspaceFolder}\\src\\nativegen\\testpegen.ts"],
             "console": "integratedTerminal"
         },
         {
             "type": "node",
             "request": "launch",
-            "name": "beta.contest.systems",
+            "name": "WasmGen",
             "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
+            "runtimeArgs": [
+                "--nolazy",
+                "-r",
+                "ts-node/register/transpile-only"
+            ],
+            "args": ["${workspaceFolder}\\src\\wasm\\testgen.ts"],
+            "console": "integratedTerminal"
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "start",
+            "skipFiles": ["<node_internals>/**"],
+            "runtimeArgs": [
+                "--nolazy",
+                "-r",
+                "ts-node/register/transpile-only"
+            ],
             "args": [
                 "${workspaceFolder}\\src\\cli.ts",
-                "../beta.contest.systems",
+                "../../rust/start",
                 "-w"
             ],
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "hepims",
-            "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../hepims", "-w"],
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
-            "name": "cbtppms",
-            "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": ["--nolazy", "-r", "ts-node/register"],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../cbtppms", "-w"],
             "console": "integratedTerminal"
         }
     ]

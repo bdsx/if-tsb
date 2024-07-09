@@ -1,5 +1,6 @@
 import fs = require("fs");
 import { fsp } from "./fsp";
+import { stripRawProtocol } from "./rawprotocol";
 
 class Cache {
     public stat?: fs.Stats;
@@ -66,7 +67,7 @@ export function cachedStat(apath: string): Promise<fs.Stats> {
             (err) => {
                 cache!.setError(err);
                 return null;
-            }
+            },
         );
         cache = new Cache(prom);
         caches.set(apath, cache);
@@ -78,6 +79,7 @@ export namespace cachedStat {
         caches.clear();
     }
     export function sync(apath: string): fs.Stats {
+        apath = stripRawProtocol(apath);
         let cache = caches.get(apath);
         if (cache != null) {
             if (cache.stat != null) return cache.stat;
@@ -105,6 +107,7 @@ export namespace cachedStat {
         return cache.stat!;
     }
     export async function exists(apath: string): Promise<boolean> {
+        apath = stripRawProtocol(apath);
         try {
             await cachedStat(apath);
             return true;
@@ -113,6 +116,7 @@ export namespace cachedStat {
         }
     }
     export function existsSync(apath: string): boolean {
+        apath = stripRawProtocol(apath);
         try {
             cachedStat.sync(apath);
             return true;
@@ -121,9 +125,11 @@ export namespace cachedStat {
         }
     }
     export async function mtime(apath: string): Promise<number> {
+        apath = stripRawProtocol(apath);
         return +(await cachedStat(apath)).mtime;
     }
     export function mtimeSync(apath: string): number {
+        apath = stripRawProtocol(apath);
         return +cachedStat.sync(apath).mtime;
     }
 }

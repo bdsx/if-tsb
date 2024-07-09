@@ -6,6 +6,7 @@ export interface BundlerOptions {
     verbose?: boolean;
     checkCircularDependency?: boolean;
     suppressDynamicImportErrors?: boolean;
+    suppressModuleNotFoundErrors?: boolean;
     faster?: boolean;
     watchWaiting?: number;
     globalModuleVarName?: string;

@@ -182,5 +182,19 @@ export namespace memcache {
             }
             this.map.clear();
         }
+
+        createIfModified(key:K, isModified:(file:V)=>boolean, creator:()=>V):V {
+            let data = this.take(key);
+            if (data !== undefined) {
+                if (!isModified(data)) {
+                    return data;
+                } else {
+                    memcache.expire(data);
+                }
+            }
+            data = creator();
+            this.register(key, data);
+            return data;
+        }
     }
 }

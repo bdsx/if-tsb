@@ -5,7 +5,7 @@ class WatchItem<T> {
 
     constructor(
         public readonly path: string,
-        private readonly watcher: fs.FSWatcher
+        private readonly watcher: fs.FSWatcher,
     ) {}
 
     close(): void {
@@ -17,12 +17,14 @@ class WatchItem<T> {
 export class FilesWatcher<T> {
     private readonly watching = new Map<string, WatchItem<T>>();
     private readonly modified = new Set<WatchItem<T>>();
-    private timeout: NodeJS.Timer | null = null;
+    private timeout: NodeJS.Timeout | null = null;
     private paused = false;
 
     constructor(
         private readonly waiting = 100,
-        private readonly onchange: (ev: IterableIterator<[T, string[]]>) => void
+        private readonly onchange: (
+            ev: IterableIterator<[T, string[]]>,
+        ) => void,
     ) {}
 
     pause(): void {
@@ -66,15 +68,21 @@ export class FilesWatcher<T> {
             return;
         }
 
-        const watcher = fs.watch(file, "utf-8");
-        watcher.on("change", () => {
-            this.modified.add(item!);
-            if (this.paused) return;
-            this._fire();
-        });
-        item = new WatchItem(file, watcher);
-        item.targets.add(target);
-        this.watching.set(file, item);
+        try {
+            const watcher = fs.watch(file, "utf-8");
+            watcher.on("change", () => {
+                this.modified.add(item!);
+                if (this.paused) return;
+                this._fire();
+            });
+            item = new WatchItem(file, watcher);
+            item.targets.add(target);
+            this.watching.set(file, item);
+        } catch (err) {
+            if (err.code !== "ENOENT") {
+                throw err;
+            }
+        }
     }
 
     private _remove(target: T, item: WatchItem<T>): void {

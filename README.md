@@ -74,6 +74,7 @@ if-tab --clear-cache # clear cache
         "globalModuleVarName": "__tsb",
         "checkCircularDependency": false,
         "suppressDynamicImportErrors": false,
+        "suppressModuleNotFoundErrors": false,
         "cleanConsole": false, // clean console before repeated by watch
         "faster": false, // skip external parsing and reporting, cannot emit some d.ts and will not replace enum const
         "watchWaiting": 30, // bundling after ${watchWaiting}ms from file modifying
