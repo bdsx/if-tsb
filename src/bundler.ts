@@ -798,24 +798,10 @@ async function bundlingProcess(
         },
         async () => {
             if (dtsWriter === null) return;
-            if (bundler.exportLib) {
-                if (bundler.exportRule === ExportRule.ES2015) {
-                    await dtsWriter.write(
-                        `export namespace ${bundler.globalVarName} {\n`,
-                    );
-                } else if (bundler.exportRule === ExportRule.Direct) {
-                    await dtsWriter.write(
-                        `declare namespace ${bundler.globalVarName} {\n`,
-                    );
-                } else if (bundler.exportRule === ExportRule.Var) {
-                    await dtsWriter.write(
-                        `declare global {\nnamespace ${bundler.globalVarName} {\n`,
-                    );
-                } else {
-                    await dtsWriter.write(
-                        `declare namespace ${bundler.globalVarName} {\n`,
-                    );
-                }
+            if (bundler.exportLib && bundler.exportRule === ExportRule.ES2015) {
+                await dtsWriter.write(
+                    `export namespace ${bundler.globalVarName} {\n`,
+                );
             } else {
                 await dtsWriter.write(
                     `declare namespace ${bundler.globalVarName} {\n`,
@@ -911,8 +897,8 @@ async function bundlingProcess(
         },
         async () => {
             if (dtsWriter === null) return;
-            await dtsWriter.write("}\n");
             if (bundler.exportRule === ExportRule.Var) {
+                await dtsWriter.write("}\n");
                 await dtsWriter.write(
                     `declare global {\nnamespace ${bundler.exportVarName} {\n`,
                 );
