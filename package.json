@@ -1,6 +1,6 @@
 {
     "name": "if-tsb",
-    "version": "0.4.44",
+    "version": "0.4.45",
     "description": "Insanely Fast TypeScript Bundler",
     "main": "./index.bundle.js",
     "bin": {

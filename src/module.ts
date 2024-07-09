@@ -386,12 +386,7 @@ export class ParsedImportPath {
     }
 
     call(factory: ts.NodeFactory): ts.Expression {
-        const mpathLitral = this.literal(factory);
-        return factory.createCallExpression(
-            factory.createIdentifier("require"),
-            undefined,
-            [mpathLitral],
-        );
+        return this.helper.callRequire(factory, this.literal(factory));
     }
 
     import(factory: ts.NodeFactory): ts.ExternalModuleReference {
@@ -609,6 +604,14 @@ export class BundlerModule {
                 const tool = new MakeTool(ctx, helper, sourceFile, false);
                 const importer = new JsImporter(tool, tool.globalVar);
 
+                const importCast = (stringLike: ts.Node) => {
+                    const literal = helper.getStringLiteral(stringLike);
+                    const importPath = helper.parseImportPath(literal);
+                    if (importPath === null) return null;
+                    const res = importer.importNode(importPath);
+                    if (res === NOIMPORT) return ctx.factory.createNull();
+                    return res;
+                };
                 const visit = (
                     _node: ts.Node,
                 ): ts.Node | ts.Node[] | undefined => {
@@ -618,7 +621,81 @@ export class BundlerModule {
                             return helper.visitChildren(mapped, visit, ctx);
                         }
                         switch (_node.kind) {
+                            // case ts.SyntaxKind.ExportDeclaration:
+                            //     break;
+                            case ts.SyntaxKind.ImportDeclaration:
+                                // import 'module'; import { a } from 'module'; import a from 'module';
+                                const node = _node as ts.ImportDeclaration;
+                                const importPath = helper.parseImportPath(
+                                    node.moduleSpecifier,
+                                );
+                                if (importPath === null) return node;
+                                const res = importer.importNode(importPath);
+                                const importCall = importCast(
+                                    node.moduleSpecifier,
+                                );
+                                if (importCall === null) return node;
+                                const clause = node.importClause;
+                                if (clause == null) {
+                                    // import 'module';
+                                    return importCall;
+                                }
+                                if (res === NOIMPORT) return undefined;
+                                if (clause.namedBindings != null) {
+                                    switch (clause.namedBindings.kind) {
+                                        case ts.SyntaxKind.NamespaceImport:
+                                            // import * as a from 'module';
+                                            if (clause.namedBindings == null) {
+                                                throw new IfTsbErrorMessage(
+                                                    IfTsbError.Unsupported,
+                                                    `Unexpected import syntax`,
+                                                );
+                                            }
+                                            return ctx.factory.createVariableDeclaration(
+                                                clause.namedBindings.name,
+                                                undefined,
+                                                undefined,
+                                                importCall,
+                                            );
+                                        case ts.SyntaxKind.NamedImports:
+                                            // import { a } from 'module';
+                                            const list: ts.BindingElement[] =
+                                                [];
+                                            for (const element of clause
+                                                .namedBindings.elements) {
+                                                list.push(
+                                                    ctx.factory.createBindingElement(
+                                                        undefined,
+                                                        element.propertyName,
+                                                        element.name,
+                                                    ),
+                                                );
+                                            }
+                                            return ctx.factory.createVariableDeclaration(
+                                                ctx.factory.createObjectBindingPattern(
+                                                    list,
+                                                ),
+                                                undefined,
+                                                undefined,
+                                                importCall,
+                                            );
+                                    }
+                                } else if (clause.name != null) {
+                                    // import a from 'module';
+                                    return ctx.factory.createElementAccessExpression(
+                                        importCall,
+                                        ctx.factory.createStringLiteral(
+                                            "default",
+                                        ),
+                                    );
+                                } else {
+                                    throw new IfTsbErrorMessage(
+                                        IfTsbError.Unsupported,
+                                        `Unexpected import syntax`,
+                                    );
+                                }
                             case ts.SyntaxKind.ImportEqualsDeclaration: {
+                                // import = require('module');
                                 const node =
                                     _node as ts.ImportEqualsDeclaration;
 
@@ -667,17 +744,10 @@ export class BundlerModule {
                                         const identifier =
                                             node.expression as ts.Identifier;
                                         if (identifier.text === "require") {
-                                            const importPath =
-                                                helper.parseImportPath(
-                                                    node.arguments[0],
-                                                );
-                                            if (importPath === null)
-                                                return node;
-                                            const res =
-                                                importer.importNode(importPath);
-                                            if (res === NOIMPORT)
-                                                return ctx.factory.createNull();
-                                            return res;
+                                            return (
+                                                importCast(node.arguments[0]) ??
+                                                node
+                                            );
                                         } else {
                                             const signature =
                                                 typeChecker.getResolvedSignature(
@@ -1123,10 +1193,17 @@ export class BundlerModule {
                                     if (importPath === null) return node;
                                     const res = importer.importNode(importPath);
                                     if (res === NOIMPORT) return node;
-                                    return tool.joinEntityNames(
+                                    const entityName = tool.joinEntityNames(
                                         res,
                                         node.qualifier,
                                     );
+                                    if (node.isTypeOf) {
+                                        return ctx.factory.createTypeOfExpression(
+                                            tool.castToIdentifier(entityName),
+                                        );
+                                    } else {
+                                        return entityName;
+                                    }
                                 }
                                 case ts.SyntaxKind.ImportDeclaration: {
                                     // import 'module'; import { a } from 'module'; import a from 'module';
@@ -1822,10 +1899,9 @@ class RefineHelper {
         }
         return new ParsedImportPath(this, importPath, out);
     }
-    parseImportPath(stringLiteralNode: ts.Node): ParsedImportPath {
-        if (stringLiteralNode.kind === ts.SyntaxKind.LiteralType) {
-            stringLiteralNode = (stringLiteralNode as ts.LiteralTypeNode)
-                .literal;
+    getStringLiteral(stringLiteralNode: ts.Node) {
+        if (ts.isLiteralTypeNode(stringLiteralNode)) {
+            stringLiteralNode = stringLiteralNode.literal;
         }
         if (stringLiteralNode.kind !== ts.SyntaxKind.StringLiteral) {
             if (this.bundler.suppressDynamicImportErrors) {
@@ -1839,8 +1915,22 @@ class RefineHelper {
                 );
             }
         }
-        const node = stringLiteralNode as ts.StringLiteral;
-        return this.makeImportModulePath(node.text);
+        return stringLiteralNode as ts.StringLiteral;
+    }
+    parseImportPath(stringLiteralNode: ts.Node): ParsedImportPath {
+        return this.makeImportModulePath(
+            this.getStringLiteral(stringLiteralNode).text,
+        );
+    }
+    callRequire(
+        factory: ts.NodeFactory,
+        literal: ts.StringLiteral,
+    ): ts.Expression {
+        return factory.createCallExpression(
+            factory.createIdentifier("require"),
+            undefined,
+            [literal],
+        );
     }
     visitChildren<T extends ts.Node>(
         node: T,
@@ -2036,6 +2126,16 @@ class MakeTool {
             chain = this.factory.createQualifiedName(chain, name);
         }
         return chain;
+    }
+
+    castToIdentifier(qualifier: ts.EntityName): ts.Expression {
+        if (ts.isQualifiedName(qualifier)) {
+            return this.factory.createPropertyAccessExpression(
+                this.castToIdentifier(qualifier.left),
+                qualifier.right,
+            );
+        }
+        return qualifier;
     }
 
     analyizeDeclPath(

@@ -15,9 +15,11 @@
                 "bundleExternals": ["arg"],
                 "wrapBegin": "//test - begin\n",
                 "wrapEnd": "\n//test - end\n",
-                "externals": ["**/externals/**"]
+                "externals": ["**/externals/**"],
+                "module": "ES6"
             },
             "compilerOptions": {
+                "module": "ES6",
                 "declaration": true
             }
         }
