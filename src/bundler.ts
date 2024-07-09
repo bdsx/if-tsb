@@ -539,16 +539,13 @@ async function bundlingProcess(
     function makeChildren(refined: RefinedModule): ChildModule[] {
         const children: ChildModule[] = [];
         for (const info of refined.imports) {
-            const mode = info.getExternalMode();
+            const mode = info.externalMode;
             if (mode !== ExternalMode.NoExternal) {
                 const id = bundler.getModuleId(info.mpath, mode); // it makes id
                 id.isAppended = true;
             } else {
                 const mpath = info.mpath;
-                const childModule = bundler.getModule(
-                    info.apathOrExternalMode,
-                    mpath,
-                );
+                const childModule = bundler.getModule(info.apath, mpath);
                 if (info.declaration) childModule.needDeclaration = true;
                 children.push({
                     module: childModule,
@@ -963,8 +960,18 @@ async function bundlingProcess(
             if (dtsWriter === null) return;
             await dtsWriter.write("}\n");
             for (const module of bundler.dtsPreloadModules) {
+                let modulePath: string;
+                if (path.isAbsolute(module.apath)) {
+                    modulePath =
+                        "./" +
+                        path
+                            .relative(bundler.outdir, module.apath)
+                            .replace(/\\/g, "/");
+                } else {
+                    modulePath = module.apath;
+                }
                 await dtsWriter.write(
-                    `import ${bundler.globalVarName}_${module.varName} = require('${module.apath}');\n`,
+                    `import ${bundler.globalVarName}_${module.varName} = require('${modulePath}');\n`,
                 );
                 sourceMapLineOffset++;
             }

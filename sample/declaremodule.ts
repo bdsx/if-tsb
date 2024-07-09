@@ -1,10 +1,12 @@
 import * as fs2 from "fs";
 import { Dir as Dir2 } from "fs";
-import { IGlob } from "glob";
+import { glob } from "glob";
 import { number } from ".";
 import { Test3 as Test4, Test5 } from "./types";
+import { external } from "./externals/test";
 
 export class Test {}
+export type b = typeof external;
 
 declare global {
     interface GlobalCls {}
@@ -14,7 +16,7 @@ declare global {
 }
 
 type GlobalClsRef = GlobalCls;
-type IGlob2 = IGlob;
+type IGlob2 = typeof glob;
 export enum Enum {}
 export const vardecl = 0;
 
@@ -24,7 +26,7 @@ declare module "." {
     let fromDeclaredModule: Test2;
     let fromCurrentModule: Test;
     let import_fs_dir: import("fs").Dir;
-    let import_glob_iglob: import("glob").IGlob;
+    let import_glob_iglob: typeof import("glob").glob;
     let dir2: Dir2;
     let fs_dir: fs2.Dir;
     let imported: Test4;

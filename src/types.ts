@@ -65,7 +65,7 @@ export interface TsConfig extends tshelper.TsConfigJson {
 }
 
 export enum ExternalMode {
-    NoExternal = 0,
-    Manual = -1,
-    Preimport = -2,
+    NoExternal,
+    Manual,
+    Preimport,
 }

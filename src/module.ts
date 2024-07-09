@@ -34,23 +34,19 @@ let moduleReloaderRegistered = false;
 
 export class ImportInfo {
     constructor(
-        public readonly apathOrExternalMode: string,
+        public readonly apath: string,
+        public readonly externalMode: ExternalMode,
         public readonly mpath: string,
         public readonly codepos: ErrorPosition | null,
         public readonly declaration: boolean,
     ) {}
-
-    getExternalMode(): ExternalMode {
-        if (/^[0-9]$/.test(this.apathOrExternalMode))
-            return -+this.apathOrExternalMode;
-        return ExternalMode.NoExternal;
-    }
 
     static stringify(imports: ImportInfo[]): string {
         type SerializedInfo = [
             string,
             string,
             boolean,
+            ExternalMode,
             number?,
             number?,
             number?,
@@ -59,16 +55,17 @@ export class ImportInfo {
         const out: SerializedInfo[] = [];
         for (const info of imports) {
             const line: SerializedInfo = [
-                info.apathOrExternalMode,
+                info.apath,
                 info.mpath,
                 info.declaration,
+                info.externalMode,
             ];
             if (info.codepos !== null) {
                 const pos = info.codepos;
-                line[3] = pos.line;
-                line[4] = pos.column;
-                line[5] = pos.width;
-                line[6] = pos.lineText;
+                line[4] = pos.line;
+                line[5] = pos.column;
+                line[6] = pos.width;
+                line[7] = pos.lineText;
             }
             out.push(line);
         }
@@ -81,6 +78,7 @@ export class ImportInfo {
             apath,
             mpath,
             declaration,
+            externalMode,
             line,
             column,
             width,
@@ -90,7 +88,15 @@ export class ImportInfo {
                 line == null
                     ? null
                     : new ErrorPosition(apath, line, column, width, lineText);
-            out.push(new ImportInfo(apath, mpath, codepos, declaration));
+            out.push(
+                new ImportInfo(
+                    apath,
+                    externalMode,
+                    mpath,
+                    codepos,
+                    declaration,
+                ),
+            );
         }
         return out;
     }
@@ -1257,101 +1263,102 @@ export class BundlerModule {
                 afterDeclarations: [declFactory(sourceFile)],
             };
 
-        let sourceMapText: string | null = null;
-        let stricted = false;
-        const allowedSources = new Set<string>();
-        allowedSources.add(moduleAPath);
+            let sourceMapText: string | null = null;
+            let stricted = false;
+            const allowedSources = new Set<string>();
+            allowedSources.add(moduleAPath);
 
-        if (moduleinfo.kind === ts.ScriptKind.JSON) {
-            if (this.isEntry) {
-                switch (bundler.exportRule) {
-                    case ExportRule.None:
-                        break;
-                    case ExportRule.ES2015:
-                        this.error(
-                            null,
-                            IfTsbError.Unsupported,
-                            `if-tsb does not support export JSON as ES2015 module`
-                        );
-                        break;
-                    case ExportRule.Direct:
-                        this.error(
-                            null,
-                            IfTsbError.Unsupported,
-                            `if-tsb does not support export JSON to ${bundler.exportVarName}`
-                        );
-                        break;
-                    case ExportRule.Var:
-                        content += `return ${sourceFile.text.trim()};\n`;
-                        break;
-                    default:
-                        content += `module.exports=${sourceFile.text.trim()};\n`;
-                        break;
+            if (moduleinfo.kind === ts.ScriptKind.JSON) {
+                if (this.isEntry) {
+                    switch (bundler.exportRule) {
+                        case ExportRule.None:
+                            break;
+                        case ExportRule.ES2015:
+                            this.error(
+                                null,
+                                IfTsbError.Unsupported,
+                                `if-tsb does not support export JSON as ES2015 module`,
+                            );
+                            break;
+                        case ExportRule.Direct:
+                            this.error(
+                                null,
+                                IfTsbError.Unsupported,
+                                `if-tsb does not support export JSON to ${bundler.exportVarName}`,
+                            );
+                            break;
+                        case ExportRule.Var:
+                            content += `return ${sourceFile.text.trim()};\n`;
+                            break;
+                        default:
+                            content += `module.exports=${sourceFile.text.trim()};\n`;
+                            break;
+                    }
+                } else {
+                    if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
+                        content += `${refined.id.varName}(){\n`;
+                    } else {
+                        content += `${refined.id.varName}:function(){\n`;
+                    }
+                    content += `if(${bundler.globalVarName}.${refined.id.varName}.exports!=null) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
+                    content += `\nreturn ${bundler.globalVarName}.${refined.id.varName}.exports=${sourceFile.text};\n},\n`;
+                }
+                if (this.needDeclaration) {
+                    let decltext = `// ${this.rpath}\n`;
+                    if (this.isEntry) {
+                        decltext += `(`;
+                        decltext += sourceFile.text.trim();
+                        decltext += ");\n";
+                    } else {
+                        decltext += `export const ${refined.id.varName}:`;
+                        decltext += sourceFile.text.trim();
+                        decltext += ";\n";
+                    }
+                    refined.declaration = Buffer.from(decltext);
                 }
             } else {
-                if (bundler.tsoptions.target! >= ts.ScriptTarget.ES2015) {
-                    content += `${refined.id.varName}(){\n`;
-                } else {
-                    content += `${refined.id.varName}:function(){\n`;
-                }
-                content += `if(${bundler.globalVarName}.${refined.id.varName}.exports!=null) return ${bundler.globalVarName}.${refined.id.varName}.exports;\n`;
-                content += `\nreturn ${bundler.globalVarName}.${refined.id.varName}.exports=${sourceFile.text};\n},\n`;
-            }
-            if (this.needDeclaration) {
-                let decltext = `// ${this.rpath}\n`;
-                if (this.isEntry) {
-                    decltext += `(`;
-                    decltext += sourceFile.text.trim();
-                    decltext += ");\n";
-                } else {
-                    decltext += `export const ${refined.id.varName}:`;
-                    decltext += sourceFile.text.trim();
-                    decltext += ";\n";
-                }
-                refined.declaration = Buffer.from(decltext);
-            }
-        } else {
-            let declaration:string|null = null;
-            let pureContent = "";
-            const filePathForTesting = moduleAPath.replace(/\\/g, "/");
-            const superHost = bundler.compilerHost;
-            const compilerHost: ts.CompilerHost = Object.setPrototypeOf(
-                {
-                    getSourceFile(
-                        fileName: string,
-                        languageVersion: ts.ScriptTarget,
-                        onError?: (message: string) => void,
-                        shouldCreateNewSourceFile?: boolean
-                    ) {
-                        if (fileName === filePathForTesting) return sourceFile;
-                        if (bundler.faster) {
-                            return undefined;
-                        }
-                        return getSourceFile(fileName);
-                    },
-                    writeFile(name: string, text: string) {
-                        if (text === "") text = " ";
-                        const info = getScriptKind(name);
-                        if (info.kind === ts.ScriptKind.JS) {
-                            pureContent = text;
-                        } else if (info.kind === ts.ScriptKind.External) {
-                            if (that.needDeclaration) {
-                                declaration = text;
+                let declaration: string | null = null;
+                let pureContent = "";
+                const filePathForTesting = moduleAPath.replace(/\\/g, "/");
+                const superHost = bundler.compilerHost;
+                const compilerHost: ts.CompilerHost = Object.setPrototypeOf(
+                    {
+                        getSourceFile(
+                            fileName: string,
+                            languageVersion: ts.ScriptTarget,
+                            onError?: (message: string) => void,
+                            shouldCreateNewSourceFile?: boolean,
+                        ) {
+                            if (fileName === filePathForTesting)
+                                return sourceFile;
+                            if (bundler.faster) {
+                                return undefined;
                             }
-                        } else if (info.ext === ".MAP") {
-                            sourceMapText = text;
-                        }
+                            return getSourceFile(fileName);
+                        },
+                        writeFile(name: string, text: string) {
+                            if (text === "") text = " ";
+                            const info = getScriptKind(name);
+                            if (info.kind === ts.ScriptKind.JS) {
+                                pureContent = text;
+                            } else if (info.kind === ts.ScriptKind.External) {
+                                if (that.needDeclaration) {
+                                    declaration = text;
+                                }
+                            } else if (info.ext === ".MAP") {
+                                sourceMapText = text;
+                            }
+                        },
+                        fileExists(fileName: string): boolean {
+                            if (fileName.endsWith(".d.ts"))
+                                return superHost.fileExists(fileName);
+                            return allowedSources.has(
+                                bundler.resolvePath(fileName),
+                            );
+                        },
                     },
-                    fileExists(fileName: string): boolean {
-                        if (fileName.endsWith(".d.ts"))
-                            return superHost.fileExists(fileName);
-                        return allowedSources.has(
-                            bundler.resolvePath(fileName)
-                        );
-                    },
-                },
-                superHost
-            );
+                    superHost,
+                );
 
                 let diagnostics: ts.Diagnostic[] | undefined = bundler.faster
                     ? undefined
@@ -1669,7 +1676,7 @@ export class BundlerModule {
 
     private _checkExternalChanges(refined: RefinedModule): boolean {
         for (const imp of refined.imports) {
-            if (imp.getExternalMode() !== ExternalMode.NoExternal) continue;
+            if (imp.externalMode !== ExternalMode.NoExternal) continue;
             for (const glob of this.bundler.externals) {
                 if (glob.test(imp.mpath)) return true;
             }
@@ -1709,11 +1716,11 @@ export class BundlerModule {
             memoryCache.register(refined.id.number, refined);
         }
         for (const imp of refined.imports) {
-            const mode = imp.getExternalMode();
+            const mode = imp.externalMode;
             if (mode !== ExternalMode.Preimport) {
                 continue;
             }
-            const id = this.bundler.getModuleId(imp.mpath, mode);
+            const id = this.bundler.getModuleId(imp.apath, mode);
             if (imp.declaration) {
                 this.bundler.dtsPreloadModules.add(id);
             } else {
@@ -1732,6 +1739,7 @@ export class BundlerModuleId {
         public readonly varName: string,
         public readonly apath: string,
     ) {
+        if (apath.startsWith(".")) debugger;
         this.kind = getScriptKind(apath);
     }
 }
@@ -1772,9 +1780,10 @@ class RefineHelper {
         codepos: ErrorPosition | null,
         declaration: boolean,
     ): BundlerModuleId {
+        if (name.startsWith(".")) debugger;
         const childModule = this.bundler.getModuleId(name, mode);
         this.refined.imports.push(
-            new ImportInfo(-mode + "", name, codepos, declaration),
+            new ImportInfo(name, mode, name, codepos, declaration),
         );
         return childModule;
     }
@@ -1784,9 +1793,16 @@ class RefineHelper {
         codepos: ErrorPosition | null,
         declaration: boolean,
     ): BundlerModule {
+        if (apath.startsWith(".")) debugger;
         const childModule = this.bundler.getModule(apath, mpath);
         this.refined.imports.push(
-            new ImportInfo(childModule.id.apath, mpath, codepos, declaration),
+            new ImportInfo(
+                childModule.id.apath,
+                ExternalMode.NoExternal,
+                mpath,
+                codepos,
+                declaration,
+            ),
         );
         return childModule;
     }
@@ -2205,8 +2221,11 @@ abstract class Importer<T> {
         if (resolved === PREIMPORT) {
             return this.preimport(importPath);
         }
+
         const childModule = this.helper.addToImportList(
-            importPath.mpath,
+            importPath.mpath.startsWith(".")
+                ? importPath.getAbsolutePath()
+                : importPath.mpath,
             resolved,
             this.helper.getErrorPosition(),
             this.delcaration,

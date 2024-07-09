@@ -14,7 +14,8 @@
             "bundlerOptions": {
                 "bundleExternals": ["arg"],
                 "wrapBegin": "//test - begin\n",
-                "wrapEnd": "\n//test - end\n"
+                "wrapEnd": "\n//test - end\n",
+                "externals": ["**/externals/**"]
             },
             "compilerOptions": {
                 "declaration": true
