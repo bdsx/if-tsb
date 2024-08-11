@@ -1,8 +1,11 @@
 {
     "name": "if-tsb",
-    "version": "0.4.47",
+    "version": "1.0.0",
     "description": "Insanely Fast TypeScript Bundler",
     "main": "./index.bundle.js",
+    "engines": {
+        "node": "^14.18.0"
+    },
     "bin": {
         "tsb": "./cli.bundle.js",
         "if-tsb": "./cli.bundle.js",

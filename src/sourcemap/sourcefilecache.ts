@@ -1,23 +1,18 @@
 import ts = require("typescript");
 import fs = require("fs");
 import path = require("path");
-import { fsp } from "../util/fsp";
-import { memcache } from "../memmgr";
+import { CacheMap } from "../memmgr";
 import { cachedStat } from "../util/cachedstat";
-import { disposeSymbol } from "../util/disposable";
+import { fsp } from "../util/fsp";
 
-const fileMap = new memcache.Map<string, StringFileData>();
-export class StringFileData implements Disposable {
+const fileMap = new CacheMap<string, StringFileData>();
+export class StringFileData {
     public readonly size: number;
     constructor(
         public readonly filename: string,
         public contents: string | null,
         private readonly mtime: number,
     ) {}
-
-    [Symbol.dispose](): void {
-        memcache.release(this);
-    }
 
     clear() {
         this.contents = null;
@@ -33,16 +28,16 @@ export class StringFileData implements Disposable {
         return mtime !== this.mtime;
     }
 
-    static take(apath: string): StringFileData {
-        return fileMap.createIfModified(
-            apath,
-            (file) => file.isModifiedSync(),
-            () => {
-                const contents = fs.readFileSync(apath, "utf8");
-                const mtime = cachedStat.mtimeSync(apath);
-                return new StringFileData(apath, contents, mtime);
-            },
-        );
+    static takeSync(apath: string): StringFileData {
+        const file = fileMap.get(apath);
+        if (file !== undefined && !file.isModifiedSync()) {
+            return file;
+        }
+        const contents = fs.readFileSync(apath, "utf8");
+        const mtime = cachedStat.mtimeSync(apath);
+        const newFile = new StringFileData(apath, contents, mtime);
+        fileMap.set(apath, newFile);
+        return newFile;
     }
 }
 
@@ -65,27 +60,29 @@ export class SourceFileData {
     clear(): void {
         this.sourceFile = null;
     }
-
-    [disposeSymbol]() {
-        memcache.release(this);
-    }
 }
 
 const all = new Map<ts.ScriptTarget, SourceFileCache>();
 
 export class SourceFileCache {
-    private readonly map = new memcache.Map<string, SourceFileData>();
+    private readonly map = new CacheMap<string, SourceFileData>();
 
     private constructor(private readonly languageVersion: ts.ScriptTarget) {}
 
     take(filename: string): SourceFileData {
         const apath = path.join(filename);
-        using file = StringFileData.take(apath);
-        return this.map.createIfModified(
-            apath,
-            (data) => data.file !== file,
-            () => new SourceFileData(file, this.languageVersion),
-        );
+        const file = StringFileData.takeSync(apath);
+        const data = this.map.get(apath);
+        if (data !== undefined && data.file === file) {
+            return data;
+        }
+        const newData = new SourceFileData(file, this.languageVersion);
+        this.map.set(apath, newData);
+        return newData;
+    }
+
+    delete(key: string) {
+        this.map.delete(key);
     }
 
     static getInstance(languageVersion: ts.ScriptTarget): SourceFileCache {

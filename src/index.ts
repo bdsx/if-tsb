@@ -2,8 +2,7 @@ if (!Date.now) Date.now = () => +new Date();
 
 import { Bundler } from "./bundler";
 import { BundlerMainContext } from "./context";
-import { memcache } from "./memmgr";
-import { CACHE_MEMORY_DEFAULT, memoryCache } from "./module";
+import { memoryCache } from "./module";
 import { tshelper } from "./tshelper";
 import { TsConfig } from "./types";
 import { cacheDir } from "./util/cachedir";
@@ -161,24 +160,15 @@ export namespace bundle {
             let clearConsole = false;
             let watchWaiting = 0;
             let watchWaitingCount = 0;
-            let cacheMemory = 0;
-            let cacheMemoryCount = 0;
             for (const bundler of bundlers) {
                 if (bundler.clearConsole) clearConsole = true;
                 if (bundler.watchWaiting != null) {
                     watchWaiting += bundler.watchWaiting;
                     watchWaitingCount++;
                 }
-                if (bundler.cacheMemory != null) {
-                    cacheMemory += bundler.cacheMemory;
-                    cacheMemoryCount++;
-                }
             }
             if (watchWaitingCount === 0) watchWaiting = 30;
             else watchWaiting /= watchWaitingCount;
-            if (cacheMemoryCount === 0) cacheMemory = CACHE_MEMORY_DEFAULT;
-            else cacheMemory /= cacheMemoryCount;
-            memcache.maximum = cacheMemory;
 
             // watch
             const watcher = new FilesWatcher<Bundler>(
