@@ -977,7 +977,8 @@ export class BundlerModule {
                                                             continue;
                                                         return ctx.factory.createQualifiedName(
                                                             res,
-                                                            decl.propertyName ||
+                                                            decl.propertyName
+                                                                ?.text ??
                                                                 decl.name,
                                                         );
                                                     }
@@ -1254,7 +1255,9 @@ export class BundlerModule {
                                                             element.name,
                                                             ctx.factory.createQualifiedName(
                                                                 res,
-                                                                element.propertyName ||
+                                                                element
+                                                                    .propertyName
+                                                                    ?.text ??
                                                                     element.name,
                                                             ),
                                                         ),
@@ -2041,7 +2044,10 @@ class MakeTool {
             sys,
             this.bundler.moduleResolutionCache,
         );
-        if (!module.resolvedModule == null && importPath.importName === ".")
+        if (
+            module.resolvedModule === undefined &&
+            importPath.importName === "."
+        )
             module = ts.nodeModuleNameResolver(
                 "./index",
                 this.module.id.apath,
