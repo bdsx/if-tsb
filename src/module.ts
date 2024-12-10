@@ -982,8 +982,9 @@ export class BundlerModule {
                                                             continue;
                                                         return ctx.factory.createQualifiedName(
                                                             res,
-                                                            decl.propertyName ||
-                                                                decl.name,
+                                                            tshelper.unwrapLiteral(
+                                                                decl.propertyName,
+                                                            ) || decl.name,
                                                         );
                                                     }
                                                 }
@@ -1259,7 +1260,9 @@ export class BundlerModule {
                                                             element.name,
                                                             ctx.factory.createQualifiedName(
                                                                 res,
-                                                                element.propertyName ||
+                                                                tshelper.unwrapLiteral(
+                                                                    element.propertyName,
+                                                                ) ||
                                                                     element.name,
                                                             ),
                                                         ),

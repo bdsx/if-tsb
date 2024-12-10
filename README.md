@@ -86,8 +86,10 @@ if-tab --clear-cache # clear cache
         "module": "none", // "commonjs"|"none"|"private"|"self"|"window"|"this"|"var (varname)"|"let (varname)"|"const (varname)"
         "preimport": [], // modules for pre-import. it replaces require('name') to __tsb.name,
         "noSourceMapWorker": false, // do not use the worker for the sourcemap generating.
-        "beginWrap": "", // begining of the bundled file. it does not contain any lines
-        "endWrap": "" // ending of the bundled file. it does not contain any lines
+        "wrapBegin": "", // begining of the bundled file. it does not contain any lines
+        "wrapEnd": "" // ending of the bundled file. it does not contain any lines
+        "declWrapBegin": "", // begining of the declartion file. it does not contain any lines
+        "declWrapEnd": "" // ending of the declartion file. it does not contain any lines
     },
     "compilerOptions": {
         /* ... */

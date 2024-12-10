@@ -91,7 +91,7 @@ export namespace tshelper {
     }
     export function hasModifier(
         node: ModifiedNode,
-        kind: ts.SyntaxKind
+        kind: ts.SyntaxKind,
     ): boolean {
         if (node.modifiers == null) return false;
         for (const mod of node.modifiers) {
@@ -118,7 +118,7 @@ export namespace tshelper {
         return false;
     }
     export function isModuleDeclaration(
-        node: ts.Node
+        node: ts.Node,
     ): node is ts.ModuleDeclaration {
         if (!ts.isModuleDeclaration(node)) return false;
         return (node.flags & ts.NodeFlags.Namespace) === 0;
@@ -147,7 +147,7 @@ export namespace tshelper {
                 return node.name.text;
             }
             throw Error(
-                `Unexpected name kind ${ts.SyntaxKind[node.name.kind]}`
+                `Unexpected name kind ${ts.SyntaxKind[node.name.kind]}`,
             );
         } else {
             return null;
@@ -172,7 +172,7 @@ export namespace tshelper {
             node: ts.Node,
             indent: string,
             line: string,
-            branch: string
+            branch: string,
         ): void {
             const name = getNodeKindName(node);
             console.log(`${indent}${branch}[ ${name} (${node.kind}) ]`);
@@ -199,15 +199,15 @@ export namespace tshelper {
         code: number,
         message: string,
         lineText: string,
-        width: number
+        width: number,
     ): void {
         const linestr = line + "";
         console.log(
             `${colors.cyan(source)}:${colors.yellow(linestr)}:${colors.yellow(
-                column + ""
+                column + "",
             )} - ${colors.red("error")} ${colors.gray(
-                "TS" + code + ":"
-            )} ${message}`
+                "TS" + code + ":",
+            )} ${message}`,
         );
         console.log();
 
@@ -216,7 +216,7 @@ export namespace tshelper {
             console.log(
                 colors.bgWhite(" ".repeat(linestr.length)) +
                     " ".repeat(column + 1) +
-                    colors.red("~".repeat(width))
+                    colors.red("~".repeat(width)),
             );
             console.log();
         }
@@ -228,12 +228,12 @@ export namespace tshelper {
     export function reportMessage(
         code: number,
         message: string,
-        noError?: boolean
+        noError?: boolean,
     ): void {
         console.log(
             `${
                 noError ? colors.gray("message") : colors.red("error")
-            } ${colors.gray(`TS${code}:`)} ${message}`
+            } ${colors.gray(`TS${code}:`)} ${message}`,
         );
     }
 
@@ -274,19 +274,19 @@ export namespace tshelper {
                         : path.join(basedir, filepath);
                 },
             },
-            ts.sys
+            ts.sys,
         );
     }
 
     export function printDiagnostrics(
-        diagnostics: readonly ts.Diagnostic[]
+        diagnostics: readonly ts.Diagnostic[],
     ): void {
         if (diagnostics.length === 0) return;
         console.error(
             ts.formatDiagnosticsWithColorAndContext(
                 diagnostics,
-                defaultFormatHost
-            )
+                defaultFormatHost,
+            ),
         );
     }
 
@@ -301,8 +301,8 @@ export namespace tshelper {
             console.error(
                 ts.formatDiagnosticsWithColorAndContext(
                     allDiagnostics,
-                    tshelper.defaultFormatHost
-                )
+                    tshelper.defaultFormatHost,
+                ),
             );
         }
     }
@@ -310,12 +310,12 @@ export namespace tshelper {
     export function tswatch(
         tsconfig: TsConfigJson,
         basedir: string,
-        opts: PhaseListener = {}
+        opts: PhaseListener = {},
     ): void {
         const parsed = ts.parseJsonConfigFileContent(
             tsconfig,
             ts.sys,
-            path.resolve(basedir)
+            path.resolve(basedir),
         );
         printDiagnostrics(parsed.errors);
         const host = ts.createWatchCompilerHost(
@@ -338,7 +338,7 @@ export namespace tshelper {
                 }
             },
             parsed.projectReferences,
-            parsed.watchOptions
+            parsed.watchOptions,
         );
         ts.createWatchProgram(host);
     }
@@ -360,7 +360,7 @@ export namespace tshelper {
     }
     export function parseTsConfig(
         configPath: string | null,
-        outputOrConfig?: string | TsConfigJson | null
+        outputOrConfig?: string | TsConfigJson | null,
     ): ParsedTsConfig {
         if (configPath !== null) configPath = path.resolve(configPath);
 
@@ -382,7 +382,7 @@ export namespace tshelper {
                     const parsed = ts.parseJsonConfigFileContent(
                         outputOrConfig,
                         ts.sys,
-                        options.basedir
+                        options.basedir,
                     );
                     tshelper.printDiagnostrics(parsed.errors);
                     options.errorCount += parsed.errors.length;
@@ -419,7 +419,7 @@ export namespace tshelper {
             if (configPath.endsWith(".json")) {
                 const configFile = ts.readConfigFile(
                     configPath,
-                    ts.sys.readFile
+                    ts.sys.readFile,
                 );
                 if (configFile.error != null) {
                     tshelper.printDiagnostrics([configFile.error]);
@@ -429,7 +429,7 @@ export namespace tshelper {
                 const parsed = ts.parseJsonConfigFileContent(
                     configFile.config,
                     ts.sys,
-                    options.basedir
+                    options.basedir,
                 );
                 if (parsed.errors.length !== 0) {
                     tshelper.printDiagnostrics(parsed.errors);
@@ -458,13 +458,24 @@ export namespace tshelper {
         return options;
     }
     export function createModuleResolutionCache(
-        basedir: string
+        basedir: string,
     ): ts.ModuleResolutionCache {
         return ts.createModuleResolutionCache(
             basedir,
             ts.sys.useCaseSensitiveFileNames
                 ? (v) => v.toLocaleLowerCase()
-                : (v) => v
+                : (v) => v,
         );
+    }
+
+    export function unwrapLiteral(
+        name: ts.ModuleExportName | undefined,
+    ): string | ts.Identifier | undefined {
+        if (name === undefined) return undefined;
+        if (ts.isStringLiteral(name)) {
+            return name.text;
+        } else {
+            return name;
+        }
     }
 }

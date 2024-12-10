@@ -89,6 +89,8 @@ export class Bundler {
     public readonly inlineSourceMap: boolean;
     public readonly wrapBegin: string | null;
     public readonly wrapEnd: string | null;
+    public readonly declWrapBegin: string | null;
+    public readonly declWrapEnd: string | null;
     private readonly moduleByName = new Map<string, BundlerModule>();
 
     public program: ts.Program | undefined;
@@ -217,6 +219,12 @@ export class Bundler {
             boptions.wrapBegin != null ? String(boptions.wrapBegin) : null;
         this.wrapEnd =
             boptions.wrapEnd != null ? String(boptions.wrapEnd) : null;
+        this.declWrapBegin =
+            boptions.declWrapBegin != null
+                ? String(boptions.declWrapBegin)
+                : null;
+        this.declWrapEnd =
+            boptions.declWrapEnd != null ? String(boptions.declWrapEnd) : null;
 
         this.cacheMemory = parsePostfix(boptions.cacheMemory);
         this.sourceFileCache = SourceFileCache.getInstance(tsoptions.target!);
@@ -798,6 +806,11 @@ async function bundlingProcess(
         },
         async () => {
             if (dtsWriter === null) return;
+            if (bundler.declWrapBegin !== null) {
+                const lineCount = count(bundler.declWrapBegin, "\n");
+                sourceMapLineOffset += lineCount;
+                await dtsWriter.write(bundler.declWrapBegin);
+            }
             if (bundler.exportLib && bundler.exportRule === ExportRule.ES2015) {
                 await dtsWriter.write(
                     `export namespace ${bundler.globalVarName} {\n`,
@@ -945,6 +958,11 @@ async function bundlingProcess(
                         break;
                 }
             }
+            if (bundler.wrapEnd !== null) {
+                const lineCount = count(bundler.wrapEnd, "\n");
+                sourceMapLineOffset += lineCount;
+                await jsWriter.write(bundler.wrapEnd);
+            }
         },
         async () => {
             if (dtsWriter === null) return;
@@ -984,6 +1002,11 @@ async function bundlingProcess(
                     );
                 }
             }
+            if (bundler.declWrapEnd !== null) {
+                const lineCount = count(bundler.declWrapEnd, "\n");
+                sourceMapLineOffset += lineCount;
+                await dtsWriter.write(bundler.declWrapEnd);
+            }
         },
     );
 
@@ -1008,11 +1031,6 @@ async function bundlingProcess(
         }
     } else {
         await writingJs;
-    }
-    if (bundler.wrapEnd !== null) {
-        const lineCount = count(bundler.wrapEnd, "\n");
-        sourceMapLineOffset += lineCount;
-        await jsWriter.write(bundler.wrapEnd);
     }
     await jsWriter.end();
     if (dtsWriter !== null) {
