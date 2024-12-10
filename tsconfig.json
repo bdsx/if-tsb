@@ -31,8 +31,8 @@
     },
     "compilerOptions": {
         "typeRoots": ["sample/types"],
-        "target": "ES2015",
-        "lib": ["ES2015", "DOM"],
+        "target": "ES2021",
+        "lib": ["ES2021", "DOM"],
         "module": "CommonJS",
         "moduleResolution": "Node",
         "noImplicitAny": true,

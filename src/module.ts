@@ -1,14 +1,13 @@
 import * as path from "path";
 import * as ts from "typescript";
 import type { Bundler } from "./bundler";
-import { memcache } from "./memmgr";
+import { CacheMap } from "./memmgr";
 import { registerModuleReloader, reloadableRequire } from "./modulereloader";
 import { StringFileData } from "./sourcemap/sourcefilecache";
 import { tshelper } from "./tshelper";
 import { ExportRule, ExternalMode, IfTsbError } from "./types";
 import { CACHE_SIGNATURE, getCacheFilePath } from "./util/cachedir";
 import { cachedStat } from "./util/cachedstat";
-import { DisposableArray } from "./util/disposable";
 import { ErrorPosition } from "./util/errpos";
 import { fsp } from "./util/fsp";
 import { ImportHelper } from "./util/importhelper";
@@ -26,9 +25,8 @@ import {
     joinModulePath,
     setNullProto,
 } from "./util/util";
-export const CACHE_MEMORY_DEFAULT = 1024 * 1024 * 1024;
-memcache.maximum = CACHE_MEMORY_DEFAULT;
-export const memoryCache = new memcache.Map<number, RefinedModule>();
+
+export const memoryCache = new CacheMap<number, RefinedModule>();
 
 let moduleReloaderRegistered = false;
 
@@ -297,8 +295,8 @@ export class RefinedModule {
         let sourceMtime = -1;
         let dtsMtime = -1;
         _error: try {
-            const cached = memoryCache.take(id.number);
-            if (cached != null) {
+            const cached = memoryCache.get(id.number);
+            if (cached !== undefined) {
                 const prom = new MtimeChecker();
                 prom.add(id.apath);
                 prom.addDecl(bundler, id.apath);
@@ -306,15 +304,15 @@ export class RefinedModule {
                 sourceMtime = srcmtime;
                 dtsMtime = dtsmtime;
                 if (cached.sourceMtime !== sourceMtime) {
-                    memcache.expire(cached);
+                    memoryCache.delete(id.number);
                     break _error;
                 }
                 if (dtsMtime !== -1 && cached.dtsMtime !== dtsMtime) {
-                    memcache.expire(cached);
+                    memoryCache.delete(id.number);
                     break _error;
                 }
                 if (cached.tsconfigMtime !== bundler.tsconfigMtime) {
-                    memcache.expire(cached);
+                    memoryCache.delete(id.number);
                     break _error;
                 }
                 return { refined: cached, sourceMtime, dtsMtime };
@@ -344,7 +342,7 @@ export class RefinedModule {
                 }
                 const refined = new RefinedModule(id);
                 const loaded = await refined.load();
-                memoryCache.register(id.number, refined);
+                memoryCache.set(id.number, refined);
                 if (!loaded) break _error;
                 if (refined.sourceMtime !== sourceMtime) break _error;
                 if (refined.dtsMtime !== dtsMtime) break _error;
@@ -467,7 +465,7 @@ export class BundlerModule {
         public readonly mpath: string,
         apath: string,
     ) {
-        this.id = bundler.getModuleId(apath, ExternalMode.NoExternal);
+        this.id = bundler.getModuleId(apath);
         this.rpath = path.relative(bundler.basedir, stripRawProtocol(apath));
     }
 
@@ -520,7 +518,7 @@ export class BundlerModule {
         if (moduleAPath.startsWith(RAW_PROTOCOL)) {
             // raw
             content += `${refined.id.varName}:`;
-            using file = StringFileData.take(stripRawProtocol(moduleAPath));
+            const file = StringFileData.takeSync(stripRawProtocol(moduleAPath));
             content += JSON.stringify(file.contents);
             content += ",\n";
         } else {
@@ -539,14 +537,11 @@ export class BundlerModule {
             const moduleinfo = getScriptKind(moduleAPath);
             const printer = ts.createPrinter();
 
-            using refs = new DisposableArray();
-
             let typeChecker: ts.TypeChecker;
 
             function getSourceFile(filepath: string): ts.SourceFile {
                 const fileName = filepath.replace(/\\/g, "/");
                 const data = bundler.sourceFileCache.take(fileName);
-                refs.append(data);
                 return data.sourceFile!;
             }
 
@@ -1800,7 +1795,9 @@ export class BundlerModule {
             !refined.checkRelativePath(this.rpath) ||
             this._checkExternalChanges(refined)
         ) {
-            if (refined !== null) memcache.expire(refined);
+            if (refined !== null) {
+                memoryCache.delete(this.id.number);
+            }
             const startTime = Date.now();
             const tooLongTimer = setInterval(() => {
                 this.bundler.main.reportMessage(
@@ -1817,14 +1814,14 @@ export class BundlerModule {
                 clearInterval(tooLongTimer);
             }
             if (refined === null) return null;
-            memoryCache.register(refined.id.number, refined);
+            memoryCache.set(refined.id.number, refined);
         }
         for (const imp of refined.imports) {
             const mode = imp.externalMode;
             if (mode !== ExternalMode.Preimport) {
                 continue;
             }
-            const id = this.bundler.getModuleId(imp.apath, mode);
+            const id = this.bundler.getModuleId(imp.apath);
             if (imp.declaration) {
                 this.bundler.dtsPreloadModules.add(id);
             } else {
@@ -1885,7 +1882,7 @@ class RefineHelper {
         declaration: boolean,
     ): BundlerModuleId {
         if (name.startsWith(".")) debugger;
-        const childModule = this.bundler.getModuleId(name, mode);
+        const childModule = this.bundler.getModuleId(name);
         this.refined.imports.push(
             new ImportInfo(name, mode, name, codepos, declaration),
         );
@@ -2047,7 +2044,10 @@ class MakeTool {
             sys,
             this.bundler.moduleResolutionCache,
         );
-        if (!module.resolvedModule == null && importPath.importName === ".")
+        if (
+            module.resolvedModule === undefined &&
+            importPath.importName === "."
+        )
             module = ts.nodeModuleNameResolver(
                 "./index",
                 this.module.id.apath,

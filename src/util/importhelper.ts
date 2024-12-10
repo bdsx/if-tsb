@@ -8,7 +8,7 @@ export class ImportingModuleInfo {
         public readonly fileName: string,
         public readonly isExternal: boolean,
         public readonly isBuiltIn: boolean,
-        public readonly fileNotFound: boolean
+        public readonly fileNotFound: boolean,
     ) {}
 }
 
@@ -16,37 +16,37 @@ export class ImportHelper {
     constructor(
         public readonly sys: ts.System,
         public readonly compilerOptions: ts.CompilerOptions,
-        public readonly cache: ts.ModuleResolutionCache
+        public readonly cache: ts.ModuleResolutionCache,
     ) {}
     resolve(
         importFrom: string,
         importString: string,
-        noJS = false
+        noJS = false,
     ): ImportingModuleInfo {
         let module = ts.nodeModuleNameResolver(
             importString,
             importFrom,
             this.compilerOptions,
             this.sys,
-            this.cache
+            this.cache,
         );
-        if (!module.resolvedModule && importString === ".")
+        if (module.resolvedModule === undefined && importString === ".")
             module = ts.nodeModuleNameResolver(
                 "./index",
                 importFrom,
                 this.compilerOptions,
                 this.sys,
-                this.cache
+                this.cache,
             );
         const info = module.resolvedModule;
-        if (info == null) {
+        if (info === undefined) {
             if (!importString.startsWith(".")) {
                 if (tshelper.isBuiltInModule(importString)) {
                     return new ImportingModuleInfo(
                         importString,
                         true,
                         true,
-                        false
+                        false,
                     );
                 }
             }
@@ -75,7 +75,7 @@ export class ImportHelper {
             childmoduleApath,
             info.isExternalLibraryImport ?? false,
             false,
-            fileNotFound
+            fileNotFound,
         );
     }
 }

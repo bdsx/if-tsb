@@ -3,7 +3,6 @@ import path = require("path");
 import fs = require("fs");
 import { identifierValidating } from "./checkvar";
 import { BundlerMainContext, IdMap } from "./context";
-import { memcache } from "./memmgr";
 import {
     BundlerModule,
     BundlerModuleId,
@@ -29,7 +28,6 @@ import {
     getParents,
     getScriptKind,
     millisecondFrom,
-    parsePostfix,
     splitContent,
     time,
 } from "./util/util";
@@ -63,7 +61,6 @@ export class Bundler {
     public readonly browser: boolean;
     public readonly browserAPathRoot: string | null;
     public readonly externals: RegExp[];
-    public readonly cacheMemory: number | undefined;
     public readonly exportRule: ExportRule;
     public readonly exportVarKeyword: string | null = null;
     public readonly exportVarName: string | null = null;
@@ -226,7 +223,6 @@ export class Bundler {
         this.declWrapEnd =
             boptions.declWrapEnd != null ? String(boptions.declWrapEnd) : null;
 
-        this.cacheMemory = parsePostfix(boptions.cacheMemory);
         this.sourceFileCache = SourceFileCache.getInstance(tsoptions.target!);
         if (boptions.module == null) {
             this.exportRule = ExportRule.None;
@@ -324,7 +320,6 @@ export class Bundler {
         );
         if (this.verbose) {
             fsp.verbose = true;
-            memcache.verbose = true;
             // ConcurrencyQueue.verbose = true;
         }
 
@@ -345,13 +340,10 @@ export class Bundler {
         }
     }
 
-    getModuleId(apath: string, mode: ExternalMode): BundlerModuleId {
+    getModuleId(apath: string): BundlerModuleId {
         let id = this.idmap.get(apath);
         if (id === undefined) {
-            const number =
-                mode === ExternalMode.NoExternal
-                    ? this.main.allocateCacheId()
-                    : mode;
+            const number = this.main.allocateCacheId();
             let varName = path.basename(apath);
             const dotidx = varName.lastIndexOf(".");
             if (dotidx !== -1) varName = varName.substr(0, dotidx);
@@ -361,13 +353,6 @@ export class Bundler {
             id = this.allocModuleVarName(number, varName, apath);
             this.idmap.set(apath, id);
             this.main.cacheJsonModified = true;
-        } else {
-            if (id.number < 0 && id.number !== mode) {
-                this.main.reportMessage(
-                    IfTsbError.InternalError,
-                    `module type mismatch (${id.number} -> ${mode})`,
-                );
-            }
         }
         return id;
     }
@@ -549,7 +534,7 @@ async function bundlingProcess(
         for (const info of refined.imports) {
             const mode = info.externalMode;
             if (mode !== ExternalMode.NoExternal) {
-                const id = bundler.getModuleId(info.mpath, mode); // it makes id
+                const id = bundler.getModuleId(info.mpath); // it makes id
                 id.isAppended = true;
             } else {
                 const mpath = info.mpath;
@@ -675,7 +660,6 @@ async function bundlingProcess(
         if (refined.globalDeclaration !== null) {
             globalDeclarationModules.push(refined.globalDeclaration);
         }
-        memcache.release(refined);
     }
 
     for (const id of bundler.idmap.values()) {

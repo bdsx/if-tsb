@@ -13,7 +13,6 @@ export interface BundlerOptions {
     bundleExternals?: boolean | string[];
     browser?: boolean;
     externals?: string[];
-    cacheMemory?: number | string;
     module?: string;
     preimport?: string[];
     concurrency?: number;
