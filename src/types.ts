@@ -20,6 +20,8 @@ export interface BundlerOptions {
     noSourceMapWorker?: boolean;
     wrapBegin?: string;
     wrapEnd?: string;
+    declWrapBegin?: string;
+    declWrapEnd?: string;
 }
 
 export enum ExportRule {

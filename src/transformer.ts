@@ -138,8 +138,9 @@ export class TransformerContext {
                                                 if (res === NOIMPORT) continue;
                                                 return ctx.factory.createQualifiedName(
                                                     res,
-                                                    decl.propertyName?.text ??
-                                                        decl.name,
+                                                    tshelper.unwrapLiteral(
+                                                        decl.propertyName,
+                                                    ) || decl.name,
                                                 );
                                             }
                                         }
@@ -404,9 +405,9 @@ export class TransformerContext {
                                                     element.name,
                                                     ctx.factory.createQualifiedName(
                                                         res,
-                                                        element.propertyName
-                                                            ?.text ??
-                                                            element.name,
+                                                        tshelper.unwrapLiteral(
+                                                            element.propertyName,
+                                                        ) ?? element.name,
                                                     ),
                                                 ),
                                             );

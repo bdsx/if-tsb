@@ -1,4 +1,6 @@
 /.vscode
 /tsconfig.json
+/sample
+/.prettierrc.json
 *.ts
 !*.d.ts

@@ -1,6 +1,6 @@
 {
     "name": "if-tsb",
-    "version": "1.0.2",
+    "version": "1.1.2",
     "description": "Insanely Fast TypeScript Bundler",
     "main": "./index.bundle.js",
     "engines": {
@@ -25,7 +25,7 @@
         "bundler",
         "bundling"
     ],
-    "author": "",
+    "author": "karikera",
     "license": "ISC",
     "dependencies": {
         "colors": "^1.4.0",
