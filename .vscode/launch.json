@@ -33,19 +33,6 @@
         {
             "type": "node",
             "request": "launch",
-            "name": "Bundle chopago",
-            "skipFiles": ["<node_internals>/**"],
-            "runtimeArgs": [
-                "--nolazy",
-                "-r",
-                "ts-node/register/transpile-only"
-            ],
-            "args": ["${workspaceFolder}\\src\\cli.ts", "../chopago", "-w"],
-            "console": "integratedTerminal"
-        },
-        {
-            "type": "node",
-            "request": "launch",
             "name": "PEGen",
             "skipFiles": ["<node_internals>/**"],
             "runtimeArgs": [

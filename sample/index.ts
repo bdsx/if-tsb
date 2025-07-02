@@ -3,13 +3,15 @@ import value2 = require("./moduleexport2");
 import "./declaremodule";
 import "./jsfile";
 import * as fs from "fs/promises";
-import { importRaw } from "../reflect";
+import { importRaw, reflect } from "../reflect";
 require("arg");
 
 export let x = 0;
 import type json = require("./json.json");
 
 fs.readFile("");
+
+const result = reflect<"./reflected", "reflectResult">();
 
 export type out = typeof json;
 

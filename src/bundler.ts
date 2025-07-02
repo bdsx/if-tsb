@@ -19,6 +19,7 @@ import { ConcurrencyQueue } from "./util/concurrent";
 import { ErrorPosition } from "./util/errpos";
 import { fsp } from "./util/fsp";
 import { NameMap } from "./util/namemap";
+import { stripRawProtocol } from "./util/rawprotocol";
 import { WriterStream } from "./util/streamwriter";
 import {
     changeExt,
@@ -33,7 +34,6 @@ import {
 } from "./util/util";
 import globToRegExp = require("glob-to-regexp");
 import colors = require("colors");
-import { stripRawProtocol } from "./util/rawprotocol";
 
 const libmap = new Map<string, Bundler>();
 
@@ -330,6 +330,37 @@ export class Bundler {
                 );
             }
         }
+    }
+
+    resolveModuleName(
+        moduleName: string,
+        containingFile: string,
+        systemOverride?: ts.System,
+    ): { apath: string; isExternal: boolean } | null {
+        const sys = systemOverride ?? this.sys;
+        let module = ts.nodeModuleNameResolver(
+            moduleName,
+            containingFile,
+            this.tsoptions,
+            sys,
+            this.moduleResolutionCache,
+        );
+        if (module.resolvedModule === undefined && moduleName === ".")
+            module = ts.nodeModuleNameResolver(
+                "./index",
+                containingFile,
+                this.tsoptions,
+                sys,
+                this.moduleResolutionCache,
+            );
+        const resolved = module.resolvedModule;
+        if (resolved === undefined) {
+            return null;
+        }
+        return {
+            apath: sys.resolvePath(resolved.resolvedFileName),
+            isExternal: resolved.isExternalLibraryImport ?? false,
+        };
     }
 
     getModuleId(apath: string): BundlerModuleId {

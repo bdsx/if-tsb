@@ -1,7 +1,7 @@
 export declare function reflect<
     SOURCE extends string,
     FUNCNAME extends string,
-    P1,
+    P1 = undefined,
     P2 = undefined,
     P3 = undefined,
     P4 = undefined,

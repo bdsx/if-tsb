@@ -3,7 +3,7 @@ import ts = require("typescript");
 import { FilesWatcher } from "./util/watch";
 
 export function registerModuleReloader(
-    compilerOptions?: ts.CompilerOptions
+    compilerOptions?: ts.CompilerOptions,
 ): void {
     if (!(Symbol.for("ts-node.register.instance") in process)) {
         const tsnode = require("ts-node") as typeof import("ts-node");
@@ -21,7 +21,7 @@ export function registerModuleReloader(
     const oldRequire = module.constructor.prototype.require;
     module.constructor.prototype.require = function (
         this: NodeModule,
-        mpath: string
+        mpath: string,
     ) {
         const exports = oldRequire.apply(this, arguments);
         if (mpath.indexOf(path.sep + "node_modules" + path.sep) === -1) {
@@ -31,9 +31,9 @@ export function registerModuleReloader(
     };
 }
 
-export function reloadableRequire(
+export function bypassRequireCall(
     requireMethod: (path: string) => unknown,
-    path: string
+    path: string,
 ): any {
     return requireMethod(path);
 }

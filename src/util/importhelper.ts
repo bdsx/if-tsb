@@ -2,6 +2,7 @@ import ts = require("typescript");
 import { tshelper } from "../tshelper";
 import { cachedStat } from "./cachedstat";
 import { getScriptKind } from "./util";
+import { Bundler } from "../bundler";
 
 export class ImportingModuleInfo {
     constructor(
@@ -15,31 +16,19 @@ export class ImportingModuleInfo {
 export class ImportHelper {
     constructor(
         public readonly sys: ts.System,
-        public readonly compilerOptions: ts.CompilerOptions,
-        public readonly cache: ts.ModuleResolutionCache,
+        public readonly bundler: Bundler,
     ) {}
     resolve(
         importFrom: string,
         importString: string,
         noJS = false,
     ): ImportingModuleInfo {
-        let module = ts.nodeModuleNameResolver(
+        const info = this.bundler.resolveModuleName(
             importString,
             importFrom,
-            this.compilerOptions,
             this.sys,
-            this.cache,
         );
-        if (module.resolvedModule === undefined && importString === ".")
-            module = ts.nodeModuleNameResolver(
-                "./index",
-                importFrom,
-                this.compilerOptions,
-                this.sys,
-                this.cache,
-            );
-        const info = module.resolvedModule;
-        if (info === undefined) {
+        if (info === null) {
             if (!importString.startsWith(".")) {
                 if (tshelper.isBuiltInModule(importString)) {
                     return new ImportingModuleInfo(
@@ -53,7 +42,7 @@ export class ImportHelper {
             return new ImportingModuleInfo(importString, true, false, true);
         }
 
-        let childmoduleApath = this.sys.resolvePath(info.resolvedFileName);
+        let childmoduleApath = info.apath;
         const kind = getScriptKind(childmoduleApath);
         let fileNotFound = false;
         if (kind.kind === ts.ScriptKind.External) {
@@ -73,7 +62,7 @@ export class ImportHelper {
         }
         return new ImportingModuleInfo(
             childmoduleApath,
-            info.isExternalLibraryImport ?? false,
+            info.isExternal,
             false,
             fileNotFound,
         );
